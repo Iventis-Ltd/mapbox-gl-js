@@ -276,6 +276,27 @@ export function queryGeometryIntersectsProjectedAabb(
     console.log('CONVEX HULL:', convexPolygon.map(p => [p.x, p.y]));
     console.log('Query Geometry:', queryGeometry.map(p => [p.x, p.y]));
 
+    // Automatically update the HTML overlay polygon if the function exists
+    // This allows real-time visualization of the AABB projection
+    try {
+        console.log('AUTO-UPDATE CHECK: window exists?', typeof window !== 'undefined');
+        if (typeof window !== 'undefined') {
+            console.log('AUTO-UPDATE CHECK: updatePolygon exists?', typeof (window as any).updatePolygon);
+            if ((window as any).updatePolygon) {
+                const polygonCoords = convexPolygon.map(p => [p.x, p.y]);
+                console.log('AUTO-UPDATING HTML POLYGON WITH COORDS:', polygonCoords);
+                (window as any).updatePolygon(polygonCoords);
+                console.log('AUTO-UPDATE: Successfully called updatePolygon');
+            } else {
+                console.log('AUTO-UPDATE: window.updatePolygon not found');
+            }
+        } else {
+            console.log('AUTO-UPDATE: window object not available');
+        }
+    } catch (error) {
+        console.error('AUTO-UPDATE ERROR:', error);
+    }
+
     if (convexPolygon.length > 0 && polygonIntersectsPolygon(queryGeometry, convexPolygon)) {
         console.log('INTERSECTION DETECTED! Depth:', minDepth);
         return minDepth;
