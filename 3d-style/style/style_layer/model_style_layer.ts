@@ -194,33 +194,7 @@ class ModelStyleLayer extends StyleLayer {
                             height: transform.height
                         }
                     });
-                    
-                    // Create a centered AABB to ensure projection is around the model center
-                    // This compensates for any coordinate precision issues
-                    const originalAabb = model.aabb;
-                    const aabbSize = [
-                        originalAabb.max[0] - originalAabb.min[0],
-                        originalAabb.max[1] - originalAabb.min[1],
-                        originalAabb.max[2] - originalAabb.min[2]
-                    ];
-                    const halfSize = [aabbSize[0] * 0.5, aabbSize[1] * 0.5, aabbSize[2] * 0.5];
-                    const centeredAabb = new Aabb(
-                        [-halfSize[0], -halfSize[1], -halfSize[2]] as [number, number, number],
-                        [halfSize[0], halfSize[1], halfSize[2]] as [number, number, number]
-                    );
-                    
-                    console.log('AABB CENTERING:', {
-                        original: {min: [...originalAabb.min], max: [...originalAabb.max]},
-                        centered: {min: [...centeredAabb.min], max: [...centeredAabb.max]},
-                        size: aabbSize,
-                        center: [
-                            (originalAabb.min[0] + originalAabb.max[0]) * 0.5,
-                            (originalAabb.min[1] + originalAabb.max[1]) * 0.5,
-                            (originalAabb.min[2] + originalAabb.max[2]) * 0.5
-                        ]
-                    });
-                    
-                    const depth = queryGeometryIntersectsProjectedAabb(projectedQueryGeometry, transform, worldViewProjection, centeredAabb);
+                    const depth = queryGeometryIntersectsProjectedAabb(projectedQueryGeometry, transform, worldViewProjection, model.aabb);
                     console.log('DEPTH RESULT:', depth);
                     if (depth != null) {
                         minDepth = Math.min(depth, minDepth);
