@@ -9,6 +9,7 @@ import {latFromMercatorY, lngFromMercatorX} from '../../../src/geo/mercator_coor
 import EXTENT from '../../../src/style-spec/data/extent';
 import {convertModelMatrixForGlobe, queryGeometryIntersectsProjectedAabb} from '../../util/model_util';
 import Tiled3dModelBucket from '../../data/bucket/tiled_3d_model_bucket';
+import {Aabb} from '../../../src/util/primitives';
 
 import type {vec3} from 'gl-matrix';
 import type {Transitionable, Transitioning, PossiblyEvaluated, PropertyValue, ConfigOptions} from '../../../src/style/properties';
@@ -193,7 +194,33 @@ class ModelStyleLayer extends StyleLayer {
                             height: transform.height
                         }
                     });
-                    const depth = queryGeometryIntersectsProjectedAabb(projectedQueryGeometry, transform, worldViewProjection, model.aabb);
+                    
+                    // Create a centered AABB to ensure projection is around the model center
+                    // This compensates for any coordinate precision issues
+                    const originalAabb = model.aabb;
+                    const aabbSize = [
+                        originalAabb.max[0] - originalAabb.min[0],
+                        originalAabb.max[1] - originalAabb.min[1],
+                        originalAabb.max[2] - originalAabb.min[2]
+                    ];
+                    const halfSize = [aabbSize[0] * 0.5, aabbSize[1] * 0.5, aabbSize[2] * 0.5];
+                    const centeredAabb = new Aabb(
+                        [-halfSize[0], -halfSize[1], -halfSize[2]] as [number, number, number],
+                        [halfSize[0], halfSize[1], halfSize[2]] as [number, number, number]
+                    );
+                    
+                    console.log('AABB CENTERING:', {
+                        original: {min: [...originalAabb.min], max: [...originalAabb.max]},
+                        centered: {min: [...centeredAabb.min], max: [...centeredAabb.max]},
+                        size: aabbSize,
+                        center: [
+                            (originalAabb.min[0] + originalAabb.max[0]) * 0.5,
+                            (originalAabb.min[1] + originalAabb.max[1]) * 0.5,
+                            (originalAabb.min[2] + originalAabb.max[2]) * 0.5
+                        ]
+                    });
+                    
+                    const depth = queryGeometryIntersectsProjectedAabb(projectedQueryGeometry, transform, worldViewProjection, centeredAabb);
                     console.log('DEPTH RESULT:', depth);
                     if (depth != null) {
                         minDepth = Math.min(depth, minDepth);
