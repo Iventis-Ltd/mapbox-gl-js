@@ -8,7 +8,9 @@ import {InstanceVertexArray} from '../../../src/data/array_types';
 import assert from 'assert';
 import {warnOnce} from '../../../src/util/util';
 import {rotationScaleYZFlipMatrix} from '../../util/model_util';
-import {tileToMeter} from '../../../src/geo/mercator_coordinate';
+import MercatorCoordinate, {tileToMeter} from '../../../src/geo/mercator_coordinate';
+import LngLat from '../../../src/geo/lng_lat';
+import Point from '@mapbox/point-geometry';
 import {instanceAttributes} from '../model_attributes';
 import {regionsEquals, transformPointToTile, pointInFootprint, skipClipping} from '../../../3d-style/source/replacement_source';
 import {LayerTypeMask} from '../../../3d-style/util/conflation';
@@ -16,7 +18,6 @@ import {isValidUrl} from '../../../src/style-spec/validate/validate_model';
 
 import type ModelStyleLayer from '../../style/style_layer/model_style_layer';
 import type {ReplacementSource} from '../../../3d-style/source/replacement_source';
-import type Point from '@mapbox/point-geometry';
 import type {EvaluationFeature} from '../../../src/data/evaluation_feature';
 import type {mat4} from 'gl-matrix';
 import type {CanonicalTileID, OverscaledTileID, UnwrappedTileID} from '../../../src/source/tile_id';
@@ -176,11 +177,7 @@ class ModelBucket implements Bucket {
             const modelId = this.addFeature(bucketFeature, bucketFeature.geometry, evaluationFeature);
 
             if (modelId) {
-                // Since 3D model geometry extends over footprint or point geometry, it is important
-                // to add some padding to envelope calculated for grid index lookup, in order to
-                // prevent false negatives in FeatureIndex's coarse check.
-                // Envelope padding is a half of featureIndex.grid cell size.
-                options.featureIndex.insert(feature, bucketFeature.geometry, index, sourceLayerIndex, this.index, this.instancesPerModel[modelId].instancedDataArray.length, EXTENT / 32);
+                options.featureIndex.insert(feature, bucketFeature.geometry, index, sourceLayerIndex, this.index, this.instancesPerModel[modelId].instancedDataArray.length, EXTENT);
             }
         }
         this.lookup = null;

@@ -222,17 +222,17 @@ export function queryGeometryIntersectsProjectedAabb(
 ): number | null | undefined {
     // DEBUG: Log the inputs
     console.log('AABB PROJECTION DEBUG:', {
-        aabb: {min: [...aabb.min], max: [...aabb.max]},
+        aabb: { min: [...aabb.min], max: [...aabb.max] },
         wvpMatrix: [...worldViewProjection],
         transformWidth: transform.width,
         transformHeight: transform.height,
         queryGeometry: queryGeometry.map(p => [p.x, p.y])
     });
-
+    
     // Collision checks are performed in screen space. Corners are in ndc space.
     const corners = Aabb.projectAabbCorners(aabb, worldViewProjection);
     console.log('RAW NDC CORNERS:', corners.map(c => [...c]));
-
+    
     // convert to screen points
     let minDepth = Number.MAX_VALUE;
     for (let c = 0; c < corners.length; ++c) {
@@ -245,25 +245,25 @@ export function queryGeometryIntersectsProjectedAabb(
             minDepth = corner[2];
         }
     }
-
+    
     const polygonPoints = corners.map(corner => new Point(corner[0], corner[1]));
     console.log('FINAL SCREEN POLYGON:', polygonPoints.map(p => [p.x, p.y]));
-
+    
     // Compute convex hull of all projected corners
     function convexHull(points: Point[]): Point[] {
         // Andrew's monotone chain algorithm (2D convex hull)
         points = points.slice().sort((a, b) => a.x - b.x || a.y - b.y);
         const lower: Point[] = [];
         for (const p of points) {
-            while (lower.length >= 2 && ((lower[lower.length - 1].x - lower[lower.length - 2].x) * (p.y - lower[lower.length - 2].y) - (lower[lower.length - 1].y - lower[lower.length - 2].y) * (p.x - lower[lower.length - 2].x)) <= 0) {
+            while (lower.length >= 2 && ((lower[lower.length-1].x-lower[lower.length-2].x)*(p.y-lower[lower.length-2].y)-(lower[lower.length-1].y-lower[lower.length-2].y)*(p.x-lower[lower.length-2].x)) <= 0) {
                 lower.pop();
             }
             lower.push(p);
         }
         const upper: Point[] = [];
-        for (let i = points.length - 1; i >= 0; i--) {
+        for (let i = points.length-1; i >= 0; i--) {
             const p = points[i];
-            while (upper.length >= 2 && ((upper[upper.length - 1].x - upper[upper.length - 2].x) * (p.y - upper[upper.length - 2].y) - (upper[upper.length - 1].y - upper[upper.length - 2].y) * (p.x - upper[upper.length - 2].x)) <= 0) {
+            while (upper.length >= 2 && ((upper[upper.length-1].x-upper[upper.length-2].x)*(p.y-upper[upper.length-2].y)-(upper[upper.length-1].y-upper[upper.length-2].y)*(p.x-upper[upper.length-2].x)) <= 0) {
                 upper.pop();
             }
             upper.push(p);

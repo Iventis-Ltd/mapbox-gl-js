@@ -335,6 +335,7 @@ Debug.extend(exported, {isSafari, getPerformanceMetrics: PerformanceUtils.getPer
  * @example
  * console.log(`Mapbox GL JS v${mapboxgl.version}`);
  */
+console.log("LOCAL MAPBOX GL JS BUILD ACTIVE 2");
 
 /**
  * Test whether the browser [supports Mapbox GL JS](https://www.mapbox.com/help/mapbox-browser-support/#mapbox-gl-js).

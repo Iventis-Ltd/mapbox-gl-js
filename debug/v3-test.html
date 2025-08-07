@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Display a map on a webpage</title>
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+    <link href="../dist/mapbox-gl.css" rel="stylesheet">
+    <script src="../dist/mapbox-gl-dev.js"></script>
+    <style>
+        body {
+            height: 100vh;
+            width: 100vw;
+            margin: 0;
+            padding: 0;
+            position: relative;
+        }
+
+        #container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+        }
+
+        #map {
+            height: 100%;
+            width: 100%;
+        }
+
+        #overlay-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+
+    </style>
+</head>
+
+<body>
+    <div id="container">
+        <div id="map"></div>
+        <canvas id="overlay-canvas"></canvas>
+    </div>
+    <script>
+        mapboxgl.accessToken = 'pk.eyJ1Ijoiam9zaG5pY2U5OCIsImEiOiJjanlrMnYwd2IwOWMwM29vcnQ2aWIwamw2In0.RRsdQF3s2hQ6qK-7BH5cKg';
+        const map = new mapboxgl.Map({
+            container: 'map',
+            center: [-74.5, 40],
+            zoom: 22,
+            pitch: 90,
+            bearing: 0,
+            style: {version: 8, layers: [], sources: {}}
+        });
+        // Enable tile boundary visualization for debugging
+        map.showTileBoundaries = true;
+        map.showLayers3DWireframe = true;
+        
+        // Overlay canvas setup
+        const overlayCanvas = document.getElementById('overlay-canvas');
+        function resizeOverlayCanvas() {
+            const mapDiv = document.getElementById('map');
+            overlayCanvas.width = mapDiv.offsetWidth;
+            overlayCanvas.height = mapDiv.offsetHeight;
+            overlayCanvas.style.width = mapDiv.offsetWidth + 'px';
+            overlayCanvas.style.height = mapDiv.offsetHeight + 'px';
+        }
+        window.addEventListener('resize', resizeOverlayCanvas);
+        map.on('resize', resizeOverlayCanvas);
+        resizeOverlayCanvas();
+
+        // Draw polygon using screen coordinates
+        function drawPolygonOnOverlay(points, color = 'red', fill = false) {
+            const ctx = overlayCanvas.getContext('2d');
+            ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+            if (!points || points.length < 2) return;
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(points[0][0], points[0][1]);
+            for (let i = 1; i < points.length; i++) {
+                ctx.lineTo(points[i][0], points[i][1]);
+            }
+            ctx.closePath();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            if (fill) {
+                ctx.globalAlpha = 0.2;
+                ctx.fillStyle = color;
+                ctx.fill();
+            }
+            ctx.restore();
+        }
+        // Example usage:
+        //drawPolygonOnOverlay([[100,100],[200,100],[200,200],[100,200]]);
+
+drawPolygonOnOverlay([
+    [553.5609038964102, 479.5393487451884],
+    [587.0035191637901, 479.5393487451884],
+    [587.2213452851064, 412.0403760185954],
+    [553.6412924421599, 412.0403760185954],
+    [554.1264576739865, 483.1898612526075],
+    [588.5359810912485, 483.1898612526075],
+    [588.7666173521767, 413.74650474655675],
+    [554.2115737909202, 413.74650474655675]
+], 'blue', true);
+
+        const modelId = "model-glb";
+        const modelUrl = "https://basic-mapbox-example.s3.eu-west-2.amazonaws.com/rchair.glb";
+
+        const featuresElement = document.getElementById("features");
+        map.on("click", (e) => {
+            console.log('Mouse event:', e.point); // CSS pixel coordinates
+            const canvas = map.getCanvas();
+            console.log('Canvas width/height:', canvas.width, canvas.height); // drawing buffer size
+            console.log('Canvas clientWidth/clientHeight:', canvas.clientWidth, canvas.clientHeight); // CSS size
+            console.log('window.devicePixelRatio:', window.devicePixelRatio);
+            console.log("Clicked at:", e);
+            const features = map.queryRenderedFeatures(e.point);
+            console.log(features);
+            //featuresElement.innerText = JSON.stringify(features);
+        });
+
+        map.once('idle', () => {
+            map.addModel(modelId, modelUrl)
+            map.addSource("layer-source", {
+                type: "geojson",
+                data: { type: "Feature", properties: { id: "object-one"}, geometry: { coordinates: [-74.5000, 40], type: "Point" } },
+            });
+            map.addLayer({
+                id: "model-layer",
+                source: "layer-source",
+                type: 'model',
+                layout: {
+                    'model-id': modelId
+                }
+            });
+            map.on('render', () => {
+    console.log('Map render event');
+});
+
+map.on('sourcedata', (e) => {
+    console.log('Source data event:', e);
+});
+
+            const chairCoords = [
+            [
+                [-74.49999690055847, 39.99999675391945],
+                [-74.49999690055847, 39.99999675391945],
+                [-74.49999690055847, 39.99999675391945],
+                [-74.49999690055847, 39.99999675391945],
+                [-74.49999690055847, 39.99999675391945]
+            ]
+            ];
+            // Add polygon layer for AABB
+            const aabbCoords = [
+                [
+                    [-74.5003080368042, 40.000087160281595],
+                    [-74.49968576431274, 40.000087160281595],
+                    [-74.49968576431274, 39.999906347437616],
+                    [-74.5003080368042, 39.999906347437616],
+                    [-74.5003080368042, 40.000087160281595]
+                ]
+            ];
+            map.addSource('aabb-polygon', {
+                type: 'geojson',
+                data: {
+                    type: 'Feature',
+                    geometry: {
+                        type: 'Polygon',
+                        coordinates: aabbCoords
+                    },
+                    properties: {}
+                }
+            });
+            map.addSource('point-source', {
+                type: 'geojson',
+                data: {
+                    type: 'Feature',
+                    geometry: {
+                        type: 'Point',
+                        coordinates: [-74.5, 40]
+                    },
+                    properties: {}
+                }
+            });
+            map.addLayer({
+                id: 'point-layer',
+                type: 'circle',
+                source: 'point-source',
+                paint: {
+                    'circle-color': 'blue',
+                    'circle-opacity': 1
+                }
+            });
+            // map.addLayer({
+            //     id: 'aabb-polygon-layer',
+            //     type: 'fill',
+            //     source: 'aabb-polygon',
+            //     paint: {
+            //         'fill-color': '#ff0000',
+            //         'fill-opacity': 0.3
+            //     }
+            // });
+        });
+
+    </script>
+
+</body>
+</html>

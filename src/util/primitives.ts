@@ -419,11 +419,16 @@ class Aabb {
 
     static projectAabbCorners(aabb: Aabb, transform: mat4): Array<vec3> {
         const corners = aabb.getCorners();
-
+        const projected: Array<vec3> = [];
         for (let i = 0; i < corners.length; ++i) {
-            vec3.transformMat4(corners[i], corners[i], transform);
+            const v = corners[i];
+            const v4 = new Float32Array([v[0], v[1], v[2], 1]);
+            const out = new Float32Array(4);
+            vec4.transformMat4(out, v4, transform);
+            const w = out[3] || 1;
+            projected.push([out[0] / w, out[1] / w, out[2] / w]);
         }
-        return corners;
+        return projected;
     }
 
     constructor(min_: vec3, max_: vec3) {

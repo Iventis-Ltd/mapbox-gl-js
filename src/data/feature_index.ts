@@ -139,6 +139,7 @@ class FeatureIndex {
         };
 
         const matching = this.grid.query(bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y, queryPredicate);
+        console.log(matching);
         matching.sort(topDownFeatureComparator);
 
         let elevationHelper = null;
@@ -164,6 +165,7 @@ class FeatureIndex {
             }
 
             const intersectionTest = (feature: VectorTileFeature, styleLayer: StyleLayer, featureState: FeatureState, layoutVertexArrayOffset: number = 0) => {
+                console.log(`FeatureIndex.query intersectionTest ${styleLayer.id}`);
                 if (!featureGeometry) {
                     featureGeometry = loadGeometry(feature, this.tileID.canonical, tileTransform);
                 }
@@ -191,7 +193,7 @@ class FeatureIndex {
         intersectionTest?: IntersectionTest
     ): void {
         const {featureIndex, bucketIndex, sourceLayerIndex, layoutVertexArrayOffset} = featureIndexData;
-
+        console.log(featureIndexData);
         const layerIDs = this.bucketLayerIDs[bucketIndex];
         const queryLayers = query.layers;
         const queryLayerIDs = Object.keys(queryLayers);

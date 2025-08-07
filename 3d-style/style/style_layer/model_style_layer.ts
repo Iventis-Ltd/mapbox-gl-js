@@ -82,15 +82,34 @@ class ModelStyleLayer extends StyleLayer {
         zoom: number,
         transform: Transform,
     ): number | boolean {
+        console.log('=== MODEL QUERY START ===', {
+            featureId: feature.id,
+            featureProperties: feature.properties,
+            hasModelManager: !!this.modelManager
+        });
         if (!this.modelManager) return false;
         const modelManager = this.modelManager;
         const bucket = queryGeometry.tile.getBucket(this);
+        console.log('MODEL QUERY BUCKET:', {
+            hasBucket: !!bucket,
+            bucketType: bucket ? bucket.constructor.name : 'none',
+            isModelBucket: bucket instanceof ModelBucket,
+            tileCoord: queryGeometry.tile.tileID,
+            hasExpandedProjMatrix: !!(queryGeometry.tile.tileID as any).expandedProjMatrix
+        });
         if (!bucket || !(bucket instanceof ModelBucket)) return false;
 
         for (const modelId in bucket.instancesPerModel) {
+            console.log('CHECKING MODEL ID:', modelId);
             const instances = bucket.instancesPerModel[modelId];
             const featureId = feature.id !== undefined ? feature.id :
                 (feature.properties && feature.properties.hasOwnProperty("id")) ? (feature.properties["id"] as string | number) : undefined;
+            console.log('FEATURE MATCHING:', {
+                featureId,
+                hasIdToFeaturesIndex: !!instances.idToFeaturesIndex,
+                availableFeatureIds: Object.keys(instances.idToFeaturesIndex),
+                hasMatchingFeature: instances.idToFeaturesIndex.hasOwnProperty(featureId)
+            });
             if (instances.idToFeaturesIndex.hasOwnProperty(featureId)) {
                 const modelFeature = instances.features[instances.idToFeaturesIndex[featureId]];
                 const model = modelManager.getModel(modelId, this.scope);
@@ -106,11 +125,30 @@ class ModelStyleLayer extends StyleLayer {
 
                     const va = instances.instancedDataArray.float32;
                     const translation: vec3 = [va[offset + 4], va[offset + 5], va[offset + 6]];
-                    const pointX = va[offset];
-                    const pointY = va[offset + 1] | 0; // point.y stored in integer part
+                    
+                    // Debug: Check the raw values before truncation
+                    const rawPointX = va[offset];
+                    const rawPointY = va[offset + 1];
+                    const pointX = rawPointX | 0; // Use bitwise OR to match rendering path
+                    const pointY = rawPointY | 0; // point.y stored in integer part
 
                     tileToLngLat(id, position, pointX, pointY);
-
+                    console.log('I AM A SPOON - PROCESSING INSTANCE:', {
+                        instanceIndex: i,
+                        pointX, pointY,
+                        rawPointX, rawPointY,
+                        position: [position.lng, position.lat],
+                        translation,
+                        instanceOffset,
+                        offset,
+                        coordinateComparison: {
+                            rawPointX, rawPointY, pointX, pointY,
+                            xDiff: rawPointX - pointX,
+                            yDiff: rawPointY - pointY
+                        }
+                    });
+                    // Use the same parameters as the rendering path for consistency,
+                    // but avoid double-applying elevation since it's already baked into translation[2]
                     calculateModelMatrix(matrix,
                                          model,
                                          transform,
@@ -118,19 +156,48 @@ class ModelStyleLayer extends StyleLayer {
                                          modelFeature.rotation,
                                          modelFeature.scale,
                                          translation,
-                                         false,
-                                         false,
-                                         false);
+                                         false, // applyElevation: false (elevation already in translation[2])
+                                         false, // followTerrainSlope: false (not needed for queries)
+                                         false); // viewportScale: false (same as rendering)
                     if (transform.projection.name === 'globe') {
                         matrix = convertModelMatrixForGlobe(matrix, transform);
                     }
-                    const worldViewProjection = mat4.multiply([] as any, transform.projMatrix, matrix);
+                    
+                    // Back to the working approach - focus on fixing the small offset
+                    const worldViewProjection = mat4.multiply([] as any, transform.expandedFarZProjMatrix, matrix);
+                    
                     // Collision checks are performed in screen space. Corners are in ndc space.
                     const screenQuery = queryGeometry.queryGeometry;
                     const projectedQueryGeometry = screenQuery.isPointQuery() ? screenQuery.screenBounds : screenQuery.screenGeometry;
+                    
+                    console.log('OFFSET DEBUG:', {
+                        clickPoint: projectedQueryGeometry,
+                        aabbBounds: "Will be shown in model_util.ts logs",
+                        queryFinalMatrix: Array.from(worldViewProjection).slice(0, 8), // First 8 elements
+                        note: "Focus on X-axis positioning offset - size correct but shifted",
+                        matrixComponents: {
+                            modelMatrix: Array.from(matrix).slice(12, 16), // Translation components
+                            expandedFarZProj: Array.from(transform.expandedFarZProjMatrix).slice(0, 4) // First row
+                        }
+                    });
+                    
+                    console.log('COORDINATE DEBUG:', {
+                        queryCoords: {pointX, pointY, position: [position.lng, position.lat]},
+                        renderingCoords: "Check RENDERING logs for rawX/rawY/pointX/pointY comparison"
+                    });
+                    console.log('QUERY GEOMETRY:', {
+                        isPointQuery: screenQuery.isPointQuery(),
+                        projectedQueryGeometry,
+                        transform: {
+                            width: transform.width,
+                            height: transform.height
+                        }
+                    });
                     const depth = queryGeometryIntersectsProjectedAabb(projectedQueryGeometry, transform, worldViewProjection, model.aabb);
+                    console.log('DEPTH RESULT:', depth);
                     if (depth != null) {
                         minDepth = Math.min(depth, minDepth);
+                        console.log('MATCH FOUND! minDepth:', minDepth);
                     }
                 }
                 if (minDepth !== Number.MAX_VALUE) {

@@ -1,5 +1,5 @@
 {
-  "name": "mapbox-gl",
+  "name": "@iventis/mapbox-gl",
   "description": "A WebGL interactive maps library",
   "version": "3.10.0",
   "main": "dist/mapbox-gl.js",
@@ -9,7 +9,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git://github.com/mapbox/mapbox-gl-js.git"
+    "url": "git://github.com/Iventis-Ltd/mapbox-gl-js"
   },
   "workspaces": [
     "src/style-spec",

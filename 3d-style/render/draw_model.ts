@@ -155,8 +155,13 @@ function setupMeshDraw(definesValues: Array<string>, dynamicBuffers: Array<Verte
 }
 
 function drawMesh(sortedMesh: SortedMesh, painter: Painter, layer: ModelStyleLayer, modelParameters: ModelParameters, stencilMode: StencilMode, colorMode: ColorMode) {
+    console.log('RENDERING DEBUG - drawMesh:', {
+        meshWorldViewProjection: [...sortedMesh.worldViewProjection],
+        nodeModelMatrix: [...sortedMesh.nodeModelMatrix],
+        meshIndex: sortedMesh.modelIndex
+    });
     const opacity = layer.paint.get('model-opacity').constantOr(1.0);
-
+    console.log('drawMesh');
     assert(opacity > 0);
     const context = painter.context;
     const depthMode = new DepthMode(painter.context.gl.LEQUAL, DepthMode.ReadWrite, painter.depthRangeFor3D);
@@ -271,7 +276,12 @@ export function prepare(layer: ModelStyleLayer, sourceCache: SourceCache, painte
 }
 
 function prepareMeshes(transform: Transform, node: ModelNode, modelMatrix: mat4, projectionMatrix: mat4, modelIndex: number, transparentMeshes: Array<SortedMesh>,  opaqueMeshes: Array<SortedMesh>) {
-
+    console.log('RENDERING DEBUG - prepareMeshes:', {
+        modelIndex,
+        inputModelMatrix: [...modelMatrix],
+        nodeMatrix: [...node.matrix],
+        projectionMatrix: [...projectionMatrix]
+    });
     let nodeModelMatrix;
     if (transform.projection.name === 'globe') {
         nodeModelMatrix = convertModelMatrixForGlobe(modelMatrix, transform);
@@ -279,7 +289,9 @@ function prepareMeshes(transform: Transform, node: ModelNode, modelMatrix: mat4,
         nodeModelMatrix = [...modelMatrix];
     }
     mat4.multiply(nodeModelMatrix, nodeModelMatrix, node.matrix);
+    console.log('RENDERING FINAL NODE MATRIX:', [...nodeModelMatrix]);
     const worldViewProjection = mat4.multiply([] as unknown as mat4, projectionMatrix, nodeModelMatrix);
+    console.log('RENDERING WVP MATRIX:', [...worldViewProjection]);
     if (node.meshes) {
         for (const mesh of node.meshes) {
             if (mesh.material.alphaMode !== 'BLEND') {
@@ -318,6 +330,12 @@ function drawShadowCaster(mesh: Mesh, matrix: mat4, painter: Painter, layer: Mod
 }
 
 function drawModels(painter: Painter, sourceCache: SourceCache, layer: ModelStyleLayer, coords: Array<OverscaledTileID>) {
+    console.log('=== MAIN DRAW MODELS START ===');
+    console.log('DRAW MODELS DEBUG:', {
+        renderPass: painter.renderPass,
+        sourceType: sourceCache.getSource().type,
+        coordsCount: coords.length
+    });
     if (painter.renderPass === 'opaque') {
         return;
     }
@@ -366,6 +384,7 @@ function drawModels(painter: Painter, sourceCache: SourceCache, layer: ModelStyl
     }
 
     if (modelSource.type === 'vector' || modelSource.type === 'geojson') {
+        console.log('TAKING VECTOR/GEOJSON PATH');
         const scope = modelSource.type === 'vector' ? layer.scope : "";
         drawVectorLayerModels(painter, sourceCache, layer, coords, scope);
         cleanup();
@@ -375,13 +394,15 @@ function drawModels(painter: Painter, sourceCache: SourceCache, layer: ModelStyl
     if (!modelSource.loaded()) return;
 
     if (modelSource.type === 'batched-model') {
+        console.log('TAKING BATCHED MODEL PATH');
         drawBatchedModels(painter, sourceCache, layer, coords);
         cleanup();
         return;
     }
 
-    if (modelSource.type !== 'model') return;
+    if (modelSource.type !== 'model') { console.log('UNKNOWN SOURCE TYPE:', modelSource.type); return; }
 
+    console.log('TAKING REGULAR MODEL PATH');
     const models = modelSource.getModels();
     const modelParametersVector: ModelParameters[] = [];
 
@@ -411,6 +432,7 @@ function drawModels(painter: Painter, sourceCache: SourceCache, layer: ModelStyl
         const modelParameters = {zScaleMatrix, negCameraPosMatrix};
         modelParametersVector.push(modelParameters);
         for (const node of model.nodes) {
+            console.log(painter.transform.height);
             prepareMeshes(painter.transform, node, model.matrix, painter.transform.expandedFarZProjMatrix, modelIndex, transparentMeshes, opaqueMeshes);
         }
         modelIndex++;
@@ -556,6 +578,12 @@ function calculateTileZoom(id: OverscaledTileID, tr: Transform): number {
 }
 
 function drawVectorLayerModels(painter: Painter, source: SourceCache, layer: ModelStyleLayer, coords: Array<OverscaledTileID>, scope: string) {
+    console.log('=== VECTOR LAYER MODELS RENDERING START ===');
+    console.log('VECTOR RENDERING DEBUG:', {
+        coordsCount: coords.length,
+        mercCameraPos: painter.transform.getFreeCameraOptions().position,
+        renderPass: painter.renderPass
+    });
     const tr = painter.transform;
     if (tr.projection.name !== 'mercator') {
         warnOnce(`Drawing 3D models for ${tr.projection.name} projection is not yet implemented`);
@@ -580,6 +608,11 @@ function drawVectorLayerModels(painter: Painter, source: SourceCache, layer: Mod
         const tile = source.getTile(coord);
         const bucket = tile.getBucket(layer) as ModelBucket | null | undefined;
         if (!bucket || bucket.projection.name !== tr.projection.name) continue;
+        console.log('VECTOR TILE DEBUG:', {
+            coord: coord.key,
+            hasBucket: !!bucket,
+            modelUris: bucket ? bucket.getModelUris() : null
+        });
         const modelUris = bucket.getModelUris();
         if (modelUris && !bucket.modelsRequested) {
             // geojson models are always set in the root scope to avoid model duplication
@@ -623,6 +656,10 @@ function drawVectorLayerModels(painter: Painter, source: SourceCache, layer: Mod
         }
 
         for (let modelId in bucket.instancesPerModel) {
+            console.log('VECTOR MODEL DEBUG:', {
+                originalModelId: modelId,
+                instancesCount: bucket.instancesPerModel[modelId].features.length
+            });
             // From effective tile zoom (distance to camera) and calculate model to use.
             const modelInstances = bucket.instancesPerModel[modelId];
             if (modelInstances.features.length > 0) {
@@ -632,6 +669,12 @@ function drawVectorLayerModels(painter: Painter, source: SourceCache, layer: Mod
 
             const model = modelManager.getModel(modelId, scope);
             if (!model || !model.uploaded) continue;
+            console.log('VECTOR MODEL FOUND:', {
+                modelId,
+                modelUploaded: model.uploaded,
+                nodeCount: model.nodes.length,
+                modelMatrix: [...model.matrix]
+            });
 
             for (const node of model.nodes) {
                 drawInstancedNode(painter, layer, node, modelInstances, cameraPos, coord, renderData);
@@ -643,6 +686,69 @@ function drawVectorLayerModels(painter: Painter, source: SourceCache, layer: Mod
 const minimumInstanceCount = 20;
 
 function drawInstancedNode(painter: Painter, layer: ModelStyleLayer, node: ModelNode, modelInstances: any, cameraPos: [number, number, number], coord: OverscaledTileID, renderData: RenderData) {
+    console.log('DRAW INSTANCED NODE DEBUG:', {
+        renderPass: painter.renderPass,
+        nodeMeshCount: node.meshes ? node.meshes.length : 0,
+        cameraPos,
+        coord: coord.key,
+        instancedDataArrayLength: modelInstances.instancedDataArray.length
+    });
+
+    // Add this debug section to see the instanced data
+    if (modelInstances.instancedDataArray.length > 0) {
+        const va = modelInstances.instancedDataArray.float32;
+        // Show the actual coordinate values used in rendering
+        const rawX = va[0];
+        const rawY = va[1];
+        const truncatedX = va[0] | 0; // What we actually use
+        const truncatedY = va[1] | 0; // What we actually use
+        
+        // Also show what query path would access for comparison
+        const instanceOffset = 0; // First instance
+        const queryOffset = instanceOffset * 16;
+        const queryRawX = va[queryOffset];
+        const queryRawY = va[queryOffset + 1];
+        const queryTruncatedX = queryRawX | 0;
+        const queryTruncatedY = queryRawY | 0;
+        
+        console.log('RENDERING INSTANCED DATA:', {
+            instanceDataFirst16: Array.from(va.slice(0, 16)), // First instance
+            expandedProjMatrix: coord.expandedProjMatrix ? [...coord.expandedProjMatrix] : 'undefined',
+            nodeMatrix: [...node.matrix],
+            coordinateComparison: {
+                rawX, rawY, truncatedX, truncatedY,
+                xDiff: rawX - truncatedX,
+                yDiff: rawY - truncatedY
+            }
+        });
+        
+        console.log('QUERY PATH COMPARISON:', {
+            queryOffset,
+            queryRawX, queryRawY,
+            queryTruncatedX, queryTruncatedY,
+            sameAsRender: {
+                sameRawX: rawX === queryRawX,
+                sameRawY: rawY === queryRawY,
+                sameTruncatedX: truncatedX === queryTruncatedX,
+                sameTruncatedY: truncatedY === queryTruncatedY
+            },
+            differences: {
+                rawXDiff: Math.abs(rawX - queryRawX),
+                rawYDiff: Math.abs(rawY - queryRawY),
+                truncatedXDiff: Math.abs(truncatedX - queryTruncatedX),
+                truncatedYDiff: Math.abs(truncatedY - queryTruncatedY)
+            }
+        });
+
+        // Calculate what the rendering matrix should be
+        const tileMatrix = painter.transform.calculatePosMatrix(coord.toUnwrapped(), painter.transform.worldSize);
+        console.log('RENDERING TILE MATRIX:', [...tileMatrix]);
+
+        // The actual matrix used for rendering this instance
+        const renderMatrix = mat4.multiply([] as any, tileMatrix, coord.expandedProjMatrix || painter.transform.expandedFarZProjMatrix);
+        console.log('RENDERING FINAL MATRIX:', [...renderMatrix]);
+    }
+
     const context = painter.context;
     const isShadowPass = painter.renderPass === 'shadow';
     const shadowRenderer = painter.shadowRenderer;
@@ -721,6 +827,12 @@ function drawInstancedNode(painter: Painter, layer: ModelStyleLayer, node: Model
             } else {
                 const instanceUniform = isShadowPass ? "u_instance" : "u_normal_matrix";
                 for (let i = 0; i < modelInstances.instancedDataArray.length; ++i) {
+                    console.log('MESH RENDERING DEBUG:', {
+                        meshIndex: i, // where i is the mesh index
+                        expandedProjMatrix: coord.expandedProjMatrix ? [...coord.expandedProjMatrix] : 'undefined',
+                        nodeMatrix: [...node.matrix],
+                        uniformValuesMatrix: uniformValues.u_matrix ? [...uniformValues.u_matrix] : 'undefined'
+                    });
                     uniformValues[instanceUniform] = new Float32Array(modelInstances.instancedDataArray.arrayBuffer, i * 64, 16);
                     program.draw(painter, context.gl.TRIANGLES, depthMode, StencilMode.disabled, colorMode, cullFaceMode,
                     uniformValues, layer.id, mesh.vertexBuffer, mesh.indexBuffer, mesh.segments, layer.paint, painter.transform.zoom,
