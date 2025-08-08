@@ -138,17 +138,62 @@ class ModelStyleLayer extends StyleLayer {
                    // const posMatrix = transform.calculatePosMatrix(tileID.toUnwrapped(), transform.worldSize);
 
                      // Build model matrix in tile space (0-8192 range)
-                    const modelMatrix = mat4.create();
+                                // Debug the scale values
+                    console.log('SCALE DEBUG:', {
+                        modelFeatureScale: modelFeature.scale,
+                        modelAABB: model.aabb,
+                        modelAABBDimensions: [
+                            model.aabb.max[0] - model.aabb.min[0],
+                            model.aabb.max[1] - model.aabb.min[1], 
+                            model.aabb.max[2] - model.aabb.min[2]
+                        ]
+                    });
+                    
+                    // Build model matrix in tile space (0-8192 range)
+                                       // Build model matrix in tile space (0-8192 range)
+                   const modelMatrix = mat4.create();
                     mat4.identity(modelMatrix);
                     
-                    // Translate to position within tile (tile coordinates)
+                    // First translate to position within tile
                     mat4.translate(modelMatrix, modelMatrix, [pointX, pointY, translation[2]]);
                     
+                    // The model AABB dimensions tell us the model's size in its native units
+                    const modelWidth = model.aabb.max[0] - model.aabb.min[0];
+                    const modelHeight = model.aabb.max[1] - model.aabb.min[1];
+                    const modelDepth = model.aabb.max[2] - model.aabb.min[2];
+                    
+                    // Calculate scale based on the zoom level and tile size
+                    // At zoom 16, EXTENT (8192) represents about 40 meters (depending on latitude)
+                    // Scale the model to match its real-world size
+                    const zoom = transform.zoom;
+                    const pixelsPerMeter = transform.pixelsPerMeter;
+                    const tilePixelSize = 512; // Standard tile size in pixels
+                    const tileWorldSize = transform.worldSize / Math.pow(2, queryGeometry.tile.tileID.canonical.z);
+                    const pixelsToTileUnits = EXTENT / tilePixelSize;
+                    
+                    // Assume the model is in meters (common for 3D models)
+                    // Convert from meters to tile units
+                    const metersToPixels = pixelsPerMeter;
+                    const pixelsToTileUnits2 = EXTENT / tileWorldSize;
+                    const metersToTileUnits = metersToPixels * pixelsToTileUnits2;
+                    
+                    const adjustedScale: vec3 = [
+                        modelFeature.scale[0] * metersToTileUnits,
+                        modelFeature.scale[1] * metersToTileUnits,
+                        modelFeature.scale[2] //* metersToTileUnits
+                    ];
+                    
+                    console.log('SCALE CALCULATION:', {
+                        modelDimensions: {width: modelWidth, height: modelHeight, depth: modelDepth},
+                        zoom,
+                        pixelsPerMeter,
+                        metersToTileUnits,
+                        adjustedScale
+                    });
                     // Apply rotation AND scale together
                     const rotationMatrix = mat4.create();
-                    rotationScaleYZFlipMatrix(rotationMatrix, modelFeature.rotation, modelFeature.scale);
+                    rotationScaleYZFlipMatrix(rotationMatrix, modelFeature.rotation, adjustedScale);
                     mat4.multiply(modelMatrix, modelMatrix, rotationMatrix);
-                    
                     // Get the tile matrix for this specific tile
                     const tileID = queryGeometry.tile.tileID;
                     const posMatrix = transform.calculatePosMatrix(tileID.toUnwrapped(), transform.worldSize);
