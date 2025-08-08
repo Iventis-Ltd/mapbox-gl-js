@@ -154,8 +154,7 @@ class ModelStyleLayer extends StyleLayer {
                    const modelMatrix = mat4.create();
                     mat4.identity(modelMatrix);
                     
-                    // First translate to position within tile
-                    mat4.translate(modelMatrix, modelMatrix, [pointX, pointY, translation[2]]);
+                   
                     
                     // The model AABB dimensions tell us the model's size in its native units
                     const modelWidth = model.aabb.max[0] - model.aabb.min[0];
@@ -177,6 +176,22 @@ class ModelStyleLayer extends StyleLayer {
                     const pixelsToTileUnits2 = EXTENT / tileWorldSize;
                     const metersToTileUnits = metersToPixels * pixelsToTileUnits2;
                     
+                    // Convert translation from meters to appropriate units
+                    // X and Y need conversion to tile units, but Z stays in meters
+                    const translationInTileUnits: vec3 = [
+                        translation[0] * metersToTileUnits,  // Convert X translation to tile units
+                        translation[1] * metersToTileUnits,  // Convert Y translation to tile units
+                        translation[2]                        // Z stays in meters (no conversion needed)
+                    ];
+                    
+                    // First translate to position within tile
+                    mat4.translate(modelMatrix, modelMatrix, [
+                        pointX + translationInTileUnits[0],  // X position + X translation in tile units
+                        pointY + translationInTileUnits[1],  // Y position + Y translation in tile units
+                        translationInTileUnits[2]            // Z translation in meters
+                    ]);
+
+
                     const adjustedScale: vec3 = [
                         modelFeature.scale[0] * metersToTileUnits,
                         modelFeature.scale[1] * metersToTileUnits,
