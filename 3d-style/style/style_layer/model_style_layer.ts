@@ -192,22 +192,26 @@ class ModelStyleLayer extends StyleLayer {
                     ]);
 
 
+                    // Calculate separate scale factors for X/Y (tile units) and Z (meters)
                     const adjustedScale: vec3 = [
-                        modelFeature.scale[0] * metersToTileUnits,
-                        modelFeature.scale[1] * metersToTileUnits,
-                        modelFeature.scale[2] //* metersToTileUnits
+                        modelFeature.scale[0] * metersToTileUnits,  // X in tile units
+                        modelFeature.scale[1] * metersToTileUnits,  // Y in tile units  
+                        modelFeature.scale[2]                        // Z stays in meters
                     ];
                     
-                    console.log('SCALE CALCULATION:', {
-                        modelDimensions: {width: modelWidth, height: modelHeight, depth: modelDepth},
-                        zoom,
-                        pixelsPerMeter,
-                        metersToTileUnits,
-                        adjustedScale
-                    });
-                    // Apply rotation AND scale together
+                    // For proper rotation, we need consistent units
+                    // Apply rotation with the original scale, then apply unit conversion
                     const rotationMatrix = mat4.create();
-                    rotationScaleYZFlipMatrix(rotationMatrix, modelFeature.rotation, adjustedScale);
+                    
+                    // First apply rotation with uniform scale
+                    rotationScaleYZFlipMatrix(rotationMatrix, modelFeature.rotation, modelFeature.scale);
+                    
+                    // Then apply the unit conversion as a separate scale
+                    const unitConversionMatrix = mat4.create();
+                    mat4.scale(unitConversionMatrix, unitConversionMatrix, [metersToTileUnits, metersToTileUnits, 1]);
+                    
+                    // Combine: rotation * unitConversion
+                    mat4.multiply(modelMatrix, modelMatrix, unitConversionMatrix);
                     mat4.multiply(modelMatrix, modelMatrix, rotationMatrix);
                     // Get the tile matrix for this specific tile
                     const tileID = queryGeometry.tile.tileID;
