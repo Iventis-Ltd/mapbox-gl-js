@@ -7,7 +7,7 @@ import {calculateModelMatrix} from '../../data/model';
 import LngLat from '../../../src/geo/lng_lat';
 import {latFromMercatorY, lngFromMercatorX} from '../../../src/geo/mercator_coordinate';
 import EXTENT from '../../../src/style-spec/data/extent';
-import {convertModelMatrixForGlobe, queryGeometryIntersectsProjectedAabb} from '../../util/model_util';
+import {convertModelMatrixForGlobe, queryGeometryIntersectsProjectedAabb, rotationScaleYZFlipMatrix} from '../../util/model_util';
 import Tiled3dModelBucket from '../../data/bucket/tiled_3d_model_bucket';
 import {Aabb} from '../../../src/util/primitives';
 
@@ -116,7 +116,7 @@ class ModelStyleLayer extends StyleLayer {
                 const model = modelManager.getModel(modelId, this.scope);
                 if (!model) return false;
 
-                let matrix: mat4 = mat4.create();
+                const matrix: mat4 = mat4.create();
                 const position = new LngLat(0, 0);
                 const id = bucket.canonical;
                 let minDepth = Number.MAX_VALUE;
@@ -126,51 +126,41 @@ class ModelStyleLayer extends StyleLayer {
 
                     const va = instances.instancedDataArray.float32;
                     const translation: vec3 = [va[offset + 4], va[offset + 5], va[offset + 6]];
-                    
+
                     // Debug: Check the raw values before truncation
                     const rawPointX = va[offset];
                     const rawPointY = va[offset + 1];
                     const pointX = rawPointX | 0; // Use bitwise OR to match rendering path
                     const pointY = rawPointY | 0; // point.y stored in integer part
 
-                    tileToLngLat(id, position, pointX, pointY);
-                    console.log('I AM A SPOON - PROCESSING INSTANCE:', {
-                        instanceIndex: i,
-                        pointX, pointY,
-                        rawPointX, rawPointY,
-                        position: [position.lng, position.lat],
-                        translation,
-                        instanceOffset,
-                        offset,
-                        coordinateComparison: {
-                            rawPointX, rawPointY, pointX, pointY,
-                            xDiff: rawPointX - pointX,
-                            yDiff: rawPointY - pointY
-                        }
-                    });
-                    // Use the same parameters as the rendering path for consistency,
-                    // but avoid double-applying elevation since it's already baked into translation[2]
-                    calculateModelMatrix(matrix,
-                                         model,
-                                         transform,
-                                         position,
-                                         modelFeature.rotation,
-                                         modelFeature.scale,
-                                         translation,
-                                         false, // applyElevation: false (elevation already in translation[2])
-                                         false, // followTerrainSlope: false (not needed for queries)
-                                         false); // viewportScale: false (same as rendering)
-                    if (transform.projection.name === 'globe') {
-                        matrix = convertModelMatrixForGlobe(matrix, transform);
-                    }
+                    // Get the tile matrix for this specific tile
+                 //   const tileID = queryGeometry.tile.tileID;
+                   // const posMatrix = transform.calculatePosMatrix(tileID.toUnwrapped(), transform.worldSize);
+
+                     // Build model matrix in tile space (0-8192 range)
+                    const modelMatrix = mat4.create();
+                    mat4.identity(modelMatrix);
                     
-                    // Back to the working approach - focus on fixing the small offset
-                    const worldViewProjection = mat4.multiply([] as any, transform.expandedFarZProjMatrix, matrix);
+                    // Translate to position within tile (tile coordinates)
+                    mat4.translate(modelMatrix, modelMatrix, [pointX, pointY, translation[2]]);
                     
-                    // Collision checks are performed in screen space. Corners are in ndc space.
+                    // Apply rotation AND scale together
+                    const rotationMatrix = mat4.create();
+                    rotationScaleYZFlipMatrix(rotationMatrix, modelFeature.rotation, modelFeature.scale);
+                    mat4.multiply(modelMatrix, modelMatrix, rotationMatrix);
+                    
+                    // Get the tile matrix for this specific tile
+                    const tileID = queryGeometry.tile.tileID;
+                    const posMatrix = transform.calculatePosMatrix(tileID.toUnwrapped(), transform.worldSize);
+                    
+                    // Combine: tile * model
+                    const tileModelMatrix = mat4.multiply([] as any, posMatrix, modelMatrix);
+                    
+                    // Apply projection
+                    const worldViewProjection = mat4.multiply([] as any, transform.projMatrix, tileModelMatrix);
                     const screenQuery = queryGeometry.queryGeometry;
                     const projectedQueryGeometry = screenQuery.isPointQuery() ? screenQuery.screenBounds : screenQuery.screenGeometry;
-                    
+
                     console.log('OFFSET DEBUG:', {
                         clickPoint: projectedQueryGeometry,
                         aabbBounds: "Will be shown in model_util.ts logs",
@@ -181,7 +171,7 @@ class ModelStyleLayer extends StyleLayer {
                             expandedFarZProj: Array.from(transform.expandedFarZProjMatrix).slice(0, 4) // First row
                         }
                     });
-                    
+
                     console.log('COORDINATE DEBUG:', {
                         queryCoords: {pointX, pointY, position: [position.lng, position.lat]},
                         renderingCoords: "Check RENDERING logs for rawX/rawY/pointX/pointY comparison"
