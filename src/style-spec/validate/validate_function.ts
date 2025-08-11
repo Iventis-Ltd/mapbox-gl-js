@@ -14,7 +14,7 @@ import {
 
 import type {ValidationOptions} from './validate';
 
-export default function validateFunction(options: ValidationOptions): any {
+export default function validateFunction(options: ValidationOptions): ValidationError[] {
     const functionValueSpec = options.valueSpec;
     const functionType = unbundle(options.value.type);
     let stopKeyType;
@@ -67,12 +67,12 @@ export default function validateFunction(options: ValidationOptions): any {
 
     return errors;
 
-    function validateFunctionStops(options: ValidationOptions) {
+    function validateFunctionStops(options: ValidationOptions): ValidationError[] {
         if (functionType === 'identity') {
             return [new ValidationError(options.key, options.value, 'identity function may not have a "stops" property')];
         }
 
-        let errors = [];
+        let errors: ValidationError[] = [];
         const value = options.value;
 
         errors = errors.concat(validateArray({
@@ -91,8 +91,8 @@ export default function validateFunction(options: ValidationOptions): any {
         return errors;
     }
 
-    function validateFunctionStop(options: ValidationOptions) {
-        let errors = [];
+    function validateFunctionStop(options: ValidationOptions): ValidationError[] {
+        let errors: ValidationError[] = [];
         const value = options.value;
         const key = options.key;
 
@@ -159,7 +159,8 @@ export default function validateFunction(options: ValidationOptions): any {
         }));
     }
 
-    function validateStopDomainValue(options: ValidationOptions, stop: any) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    function validateStopDomainValue(options: ValidationOptions, stop: any): ValidationError[] {
         const type = getType(options.value);
         const value = unbundle(options.value);
 
@@ -193,10 +194,10 @@ export default function validateFunction(options: ValidationOptions): any {
             previousStopDomainValue = value;
         }
 
-        if (functionType === 'categorical' && (value as any) in stopDomainValues) {
+        if (functionType === 'categorical' && (value as string) in stopDomainValues) {
             return [new ValidationError(options.key, reportValue, 'stop domain values must be unique')];
         } else {
-            stopDomainValues[(value as any)] = true;
+            stopDomainValues[(value as string)] = true;
         }
 
         return [];

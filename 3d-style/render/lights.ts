@@ -71,11 +71,11 @@ export const lightsUniformValues = (directional: Lights<Directional>, ambient: L
     const direction = directional.properties.get('direction');
 
     const dirIgnoreLut = directional.properties.get('color-use-theme') === 'none';
-    const directionalColor = directional.properties.get('color').toRenderColor(dirIgnoreLut ? null : style.getLut(directional.scope)).toArray01();
+    const directionalColor = directional.properties.get('color').toNonPremultipliedRenderColor(dirIgnoreLut ? null : style.getLut(directional.scope)).toArray01();
     const directionalIntensity = directional.properties.get('intensity');
 
     const ambIgnoreLut = ambient.properties.get('color-use-theme') === 'none';
-    const ambientColor = ambient.properties.get('color').toRenderColor(ambIgnoreLut ? null : style.getLut(ambient.scope)).toArray01();
+    const ambientColor = ambient.properties.get('color').toNonPremultipliedRenderColor(ambIgnoreLut ? null : style.getLut(ambient.scope)).toArray01();
     const ambientIntensity = ambient.properties.get('intensity');
 
     const dirVec: [number, number, number] = [direction.x, direction.y, direction.z];
@@ -83,7 +83,7 @@ export const lightsUniformValues = (directional: Lights<Directional>, ambient: L
     const ambientColorLinear = sRGBToLinearAndScale(ambientColor, ambientIntensity);
 
     const directionalColorLinear = sRGBToLinearAndScale(directionalColor, directionalIntensity);
-    const groundRadianceSrgb = calculateGroundRadiance((dirVec as any), (directionalColorLinear as any), (ambientColorLinear as any));
+    const groundRadianceSrgb = calculateGroundRadiance(dirVec, directionalColorLinear, ambientColorLinear);
     return {
         'u_lighting_ambient_color': ambientColorLinear,
         'u_lighting_directional_dir': dirVec,

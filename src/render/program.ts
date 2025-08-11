@@ -33,11 +33,14 @@ import type {UniformBindings, UniformValues} from './uniform_binding';
 import type {BinderUniform} from '../data/program_configuration';
 import type Painter from './painter';
 import type {Segment} from "../data/segment";
-import type {DynamicDefinesType} from '../render/program/program_uniforms';
+import type {ProgramUniformsType, DynamicDefinesType} from '../render/program/program_uniforms';
+import type {PossiblyEvaluated} from '../style/properties';
+
+export type ProgramName = keyof ProgramUniformsType;
 
 export type DrawMode = WebGL2RenderingContext['POINTS'] | WebGL2RenderingContext['LINES'] | WebGL2RenderingContext['TRIANGLES'] | WebGL2RenderingContext['LINE_STRIP'];
 
-type ShaderSource = {
+export type ShaderSource = {
     fragmentSource: string;
     vertexSource: string;
     staticAttributes: Array<string>;
@@ -58,21 +61,20 @@ const debugWireframe3DLayerProgramNames = [
     "rainParticle",
     "snowParticle",
     "fillExtrusion",  "fillExtrusionGroundEffect",
+    "elevatedStructures",
     "model",
     "symbol"];
 
 type InstancingUniformType = {
     ['u_instanceID']: Uniform1i;
-}
+};
 
 const instancingUniforms = (context: Context): InstancingUniformType => ({
     'u_instanceID': new Uniform1i(context)});
 
 class Program<Us extends UniformBindings> {
     program: WebGLProgram;
-    attributes: {
-        [_: string]: number;
-    };
+    attributes: Record<string, number>;
     numAttributes: number;
     fixedUniforms: Us;
     binderUniforms: Array<BinderUniform>;
@@ -84,7 +86,7 @@ class Program<Us extends UniformBindings> {
     globeUniforms: GlobeUniformsType | null | undefined;
     shadowUniforms: ShadowUniformsType | null | undefined;
 
-    name: string;
+    name: ProgramName;
     configuration: ProgramConfiguration | null | undefined;
     fixedDefines: DynamicDefinesType[];
 
@@ -107,14 +109,16 @@ class Program<Us extends UniformBindings> {
         return key;
     }
 
-    constructor(context: Context,
-                name: string,
-                source: ShaderSource,
-                configuration: ProgramConfiguration | null | undefined,
-                fixedUniforms: (arg1: Context) => Us,
-                fixedDefines: DynamicDefinesType[]) {
+    constructor(
+        context: Context,
+        name: ProgramName,
+        source: ShaderSource,
+        configuration: ProgramConfiguration | null | undefined,
+        fixedUniforms: (arg1: Context) => Us,
+        fixedDefines: DynamicDefinesType[]
+    ) {
         const gl = context.gl;
-        this.program = (gl.createProgram());
+        this.program = gl.createProgram();
 
         this.configuration = configuration;
         this.name = name;
@@ -165,7 +169,7 @@ class Program<Us extends UniformBindings> {
         }
         gl.shaderSource(fragmentShader, fragmentSource);
         gl.compileShader(fragmentShader);
-        assert(gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS), (gl.getShaderInfoLog(fragmentShader) as any));
+        assert(gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS), gl.getShaderInfoLog(fragmentShader));
         gl.attachShader(this.program, fragmentShader);
 
         const vertexShader = (gl.createShader(gl.VERTEX_SHADER));
@@ -175,7 +179,7 @@ class Program<Us extends UniformBindings> {
         }
         gl.shaderSource(vertexShader, vertexSource);
         gl.compileShader(vertexShader);
-        assert(gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS), (gl.getShaderInfoLog(vertexShader) as any));
+        assert(gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS), gl.getShaderInfoLog(vertexShader));
         gl.attachShader(this.program, vertexShader);
 
         this.attributes = {};
@@ -192,7 +196,7 @@ class Program<Us extends UniformBindings> {
         }
 
         gl.linkProgram(this.program);
-        assert(gl.getProgramParameter(this.program, gl.LINK_STATUS), (gl.getProgramInfoLog(this.program) as any));
+        assert(gl.getProgramParameter(this.program, gl.LINK_STATUS), gl.getProgramInfoLog(this.program));
 
         gl.deleteShader(vertexShader);
         gl.deleteShader(fragmentShader);
@@ -305,7 +309,12 @@ class Program<Us extends UniformBindings> {
         stencilMode: Readonly<StencilMode>,
         colorMode: Readonly<ColorMode>,
         indexBuffer: IndexBuffer, segment: Segment,
-        currentProperties: any, zoom?: number | null, configuration?: ProgramConfiguration | null, instanceCount?: number | null) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        currentProperties: PossiblyEvaluated<any>,
+        zoom?: number,
+        configuration?: ProgramConfiguration,
+        instanceCount?: number
+    ) {
 
         const wireframe = painter.options.wireframe;
 
@@ -351,12 +360,13 @@ class Program<Us extends UniformBindings> {
             return;
         }
 
-        const debugDefines = [...this.fixedDefines] as DynamicDefinesType[];
+        const debugDefines: DynamicDefinesType[] = [...this.fixedDefines];
         debugDefines.push('DEBUG_WIREFRAME');
         const debugProgram = painter.getOrCreateProgram(this.name, {config: this.configuration, defines: debugDefines});
 
         context.program.set(debugProgram.program);
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const copyUniformValues = (group: string, pSrc: any, pDst: any) => {
             if (pSrc[group] && pDst[group]) {
                 for (const name in pSrc[group]) {
@@ -368,7 +378,7 @@ class Program<Us extends UniformBindings> {
         };
 
         if (configuration) {
-            configuration.setUniforms(debugProgram.program, context, debugProgram.binderUniforms, currentProperties, {zoom: (zoom as any)});
+            configuration.setUniforms(debugProgram.program, context, debugProgram.binderUniforms, currentProperties, {zoom});
         }
 
         copyUniformValues("fixedUniforms", this, debugProgram);
@@ -427,6 +437,7 @@ class Program<Us extends UniformBindings> {
         context.setColorMode(colorMode);
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     checkUniforms(name: string, define: DynamicDefinesType, uniforms: any) {
         if (this.fixedDefines.includes(define)) {
             for (const key of Object.keys(uniforms)) {
@@ -437,7 +448,7 @@ class Program<Us extends UniformBindings> {
         }
     }
 
-    draw(
+    draw<Us>(
          painter: Painter,
          drawMode: DrawMode,
          depthMode: Readonly<DepthMode>,
@@ -449,11 +460,13 @@ class Program<Us extends UniformBindings> {
          layoutVertexBuffer: VertexBuffer,
          indexBuffer: IndexBuffer | undefined,
          segments: SegmentVector,
-         currentProperties: any,
-         zoom?: number | null,
-         configuration?: ProgramConfiguration | null,
-         dynamicLayoutBuffers?: Array<VertexBuffer | null | undefined> | null,
-         instanceCount?: number | null) {
+         // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         currentProperties?: PossiblyEvaluated<any>,
+         zoom?: number,
+         configuration?: ProgramConfiguration,
+         dynamicLayoutBuffers?: Array<VertexBuffer | null | undefined>,
+         instanceCount?: number
+    ) {
 
         const context = painter.context;
         const gl = context.gl;
@@ -471,7 +484,7 @@ class Program<Us extends UniformBindings> {
         }
 
         if (configuration) {
-            configuration.setUniforms(this.program, context, this.binderUniforms, currentProperties, {zoom: (zoom as any)});
+            configuration.setUniforms(this.program, context, this.binderUniforms, currentProperties, {zoom});
         }
 
         const primitiveSize = {

@@ -51,9 +51,7 @@ export function validateHSLA(h: unknown, s: unknown, l: unknown, a?: unknown): s
     return null;
 }
 
-export type Value = null | string | boolean | number | Color | Collator | Formatted | ResolvedImage | ReadonlyArray<Value> | {
-    readonly [key: string]: Value;
-};
+export type Value = null | string | boolean | number | Color | Collator | Formatted | ResolvedImage | ReadonlyArray<Value> | {readonly [key: string]: Value};
 
 export function isValue(mixed: unknown): boolean {
     if (mixed === null) {
@@ -137,9 +135,7 @@ export function toString(value: Value): string {
         return '';
     } else if (type === 'string' || type === 'number' || type === 'boolean') {
         return String(value as string | number | boolean);
-    } else if (value instanceof Color) {
-        return value.toStringPremultipliedAlpha();
-    } else if (value instanceof Formatted || value instanceof ResolvedImage) {
+    } else if (value instanceof Formatted || value instanceof ResolvedImage || value instanceof Color) {
         return value.toString();
     } else {
         return JSON.stringify(value);

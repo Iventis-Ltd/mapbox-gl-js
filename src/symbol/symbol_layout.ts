@@ -1,7 +1,6 @@
 import Anchor from './anchor';
 import {getAnchors, getCenterAnchor} from './get_anchors';
-import clipLine from './clip_line';
-import {shapeText, shapeIcon, WritingMode, fitIconToText} from './shaping';
+import {shapeText, shapeIcon, WritingMode, fitIconToText, isPositionedIcon, getPositionedIconSize, isFullyStretchableX, isFullyStretchableY} from './shaping';
 import {getGlyphQuads, getIconQuads} from './quads';
 import {warnOnce, degToRad, clamp} from '../util/util';
 import {
@@ -12,24 +11,33 @@ import findPoleOfInaccessibility from '../util/find_pole_of_inaccessibility';
 import classifyRings from '../util/classify_rings';
 import EXTENT from '../style-spec/data/extent';
 import EvaluationParameters from '../style/evaluation_parameters';
-import {getRasterizedIconSize, SIZE_PACK_FACTOR} from './symbol_size';
+import {getRasterizedIconSize, SIZE_PACK_FACTOR, type SizeData} from './symbol_size';
 import ONE_EM from './one_em';
 import Point from '@mapbox/point-geometry';
 import murmur3 from 'murmurhash-js';
+import {PROPERTY_ELEVATION_ID} from '../../3d-style/elevation/elevation_constants';
+import {clipLines} from '../util/line_clipping';
+import {keys} from '../util/object';
+import {getImagePosition, ICON_PADDING, type ImagePositionMap, type ImagePosition} from '../render/image_atlas';
 
+import type {SymbolFeature} from '../data/bucket/symbol_bucket';
 import type SymbolBucket from '../data/bucket/symbol_bucket';
 import type {CanonicalTileID} from '../source/tile_id';
-import type {Shaping, PositionedIcon, TextJustify} from './shaping';
+import type {Shaping, PositionedIcon, TextJustify, SymbolAnchor} from './shaping';
+import type {GlyphMap} from '../render/glyph_manager';
 import type {CollisionBoxArray} from '../data/array_types';
-import type {SymbolFeature} from '../data/bucket/symbol_bucket';
-import type {StyleImage} from '../style/style_image';
-import type {StyleGlyph} from '../style/style_glyph';
+import type {StyleImage, StyleImageMap} from '../style/style_image';
 import type SymbolStyleLayer from '../style/style_layer/symbol_style_layer';
-import type {ImagePosition} from '../render/image_atlas';
 import type {GlyphPositions} from '../render/glyph_atlas';
-import type {PossiblyEvaluatedPropertyValue} from '../style/properties';
+import type {PossiblyEvaluated, PossiblyEvaluatedPropertyValue, PropertyValue} from '../style/properties';
 import type Projection from '../geo/projection/projection';
 import type {vec3} from 'gl-matrix';
+import type {LayoutProps} from '../style/style_layer/symbol_style_layer_properties';
+import type ImageAtlas from '../render/image_atlas';
+import type ResolvedImage from '../style-spec/expression/types/resolved_image';
+import type {ImageId} from '../style-spec/expression/types/image_id';
+import type {ImageVariant, StringifiedImageVariant} from '../style-spec/expression/types/image_variant';
+import type {ImageRasterizationTasks} from '../render/image_manager';
 
 // The symbol layout process needs `text-size` evaluated at up to five different zoom levels, and
 // `icon-size` at up to three:
@@ -45,7 +53,8 @@ import type {vec3} from 'gl-matrix';
 //
 // (1) and (2) are stored in `bucket.layers[0].layout`. The remainder are below.
 //
-type Sizes = {
+export type Sizes = {
+    scaleFactor: number,
     textScaleFactor: number
     iconScaleFactor: number
     textSizeScaleRange: [number, number]
@@ -78,7 +87,7 @@ export const SymbolBucketConstants = {
     MAX_GLYPHS: 65535
 } as const;
 
-export function evaluateVariableOffset(anchor: TextAnchor, [offsetX, offsetY]: [any, any]): [number, number] {
+export function evaluateVariableOffset(anchor: TextAnchor, [offsetX, offsetY]: [number, number]): [number, number] {
     let x = 0, y = 0;
 
     if (offsetY === INVALID_TEXT_OFFSET) { // radial offset
@@ -154,31 +163,41 @@ export function evaluateVariableOffset(anchor: TextAnchor, [offsetX, offsetY]: [
     return [x, y];
 }
 
+type ShapedTextOrientations = {horizontal: Partial<Record<PlacementTypes, Shaping>>, vertical?: Shaping};
+export type SymbolFeatureData = {
+    feature: SymbolFeature,
+    shapedTextOrientations: ShapedTextOrientations,
+    shapedText: Shaping,
+    shapedIcon: PositionedIcon,
+    iconPrimary: ImageVariant,
+    iconSecondary: ImageVariant,
+    verticallyShapedIcon: PositionedIcon,
+    layoutTextSize: number,
+    layoutIconSize: number,
+    textOffset: [number, number],
+    isSDFIcon: boolean,
+    iconTextFit: "none" | "width" | "height" | "both",
+    iconOffset: [number, number]};
+
+export type SymbolBucketData = {
+    featureData: SymbolFeatureData[],
+    sizes: Sizes,
+    hasAnySecondaryIcon: boolean,
+    textAlongLine: boolean,
+    symbolPlacement: "point" | "line" | "line-center"
+};
+
 export function performSymbolLayout(bucket: SymbolBucket,
-                             glyphMap: {
-                                 [_: string]: {
-                                     glyphs: {
-                                         [_: number]: StyleGlyph | null | undefined;
-                                     };
-                                     ascender?: number;
-                                     descender?: number;
-                                 };
-                             },
+                             glyphMap: GlyphMap,
                              glyphPositions: GlyphPositions,
-                             imageMap: {
-                                 [_: string]: StyleImage;
-                             },
-                             imagePositions: {
-                                 [_: string]: ImagePosition;
-                             },
-                             showCollisionBoxes: boolean,
-                             availableImages: Array<string>,
+                             imageMap: StyleImageMap<StringifiedImageVariant>,
+                             imagePositions: ImagePositionMap,
                              canonical: CanonicalTileID,
                              tileZoom: number,
-                             projection: Projection,
                              scaleFactor: number = 1,
                              pixelRatio: number,
-                             brightness?: number | null) {
+                             imageRasterizationTasks: ImageRasterizationTasks,
+                             worldview: string | undefined): SymbolBucketData {
     bucket.createArrays();
 
     const tileSize = 512 * bucket.overscaling;
@@ -189,7 +208,7 @@ export function performSymbolLayout(bucket: SymbolBucket,
     const layout = bucket.layers[0].layout;
     const unevaluatedLayoutValues = bucket.layers[0]._unevaluatedLayout._values;
 
-    const sizes: Record<string, any> = {};
+    const sizes = {} as Sizes;
 
     sizes.scaleFactor = scaleFactor;
     sizes.textSizeScaleRange = layout.get('text-size-scale-range');
@@ -198,37 +217,35 @@ export function performSymbolLayout(bucket: SymbolBucket,
     const [iconSizeScaleRangeMin, iconSizeScaleRangeMax] = sizes.iconSizeScaleRange;
     sizes.textScaleFactor = clamp(sizes.scaleFactor, textSizeScaleRangeMin, textSizeScaleRangeMax);
     sizes.iconScaleFactor = clamp(sizes.scaleFactor, iconSizeScaleRangeMin, iconSizeScaleRangeMax);
+    const unevaluatedTextSize = unevaluatedLayoutValues['text-size'];
+    const unevaluatedIconSize = unevaluatedLayoutValues['icon-size'];
 
     if (bucket.textSizeData.kind === 'composite') {
         const {minZoom, maxZoom} = bucket.textSizeData;
         sizes.compositeTextSizes = [
-            unevaluatedLayoutValues['text-size'].possiblyEvaluate(new EvaluationParameters(minZoom), canonical),
-            unevaluatedLayoutValues['text-size'].possiblyEvaluate(new EvaluationParameters(maxZoom), canonical)
+            unevaluatedTextSize.possiblyEvaluate(new EvaluationParameters(minZoom, {worldview}), canonical),
+            unevaluatedTextSize.possiblyEvaluate(new EvaluationParameters(maxZoom, {worldview}), canonical)
         ];
     }
 
     if (bucket.iconSizeData.kind === 'composite') {
         const {minZoom, maxZoom} = bucket.iconSizeData;
         sizes.compositeIconSizes = [
-            unevaluatedLayoutValues['icon-size'].possiblyEvaluate(new EvaluationParameters(minZoom), canonical),
-            unevaluatedLayoutValues['icon-size'].possiblyEvaluate(new EvaluationParameters(maxZoom), canonical)
+            unevaluatedIconSize.possiblyEvaluate(new EvaluationParameters(minZoom, {worldview}), canonical),
+            unevaluatedIconSize.possiblyEvaluate(new EvaluationParameters(maxZoom, {worldview}), canonical)
         ];
     }
 
-    sizes.layoutTextSize = unevaluatedLayoutValues['text-size'].possiblyEvaluate(new EvaluationParameters(tileZoom + 1), canonical);
-    sizes.layoutIconSize = unevaluatedLayoutValues['icon-size'].possiblyEvaluate(new EvaluationParameters(tileZoom + 1), canonical);
-    sizes.textMaxSize = unevaluatedLayoutValues['text-size'].possiblyEvaluate(new EvaluationParameters(18), canonical);
+    sizes.layoutTextSize = unevaluatedTextSize.possiblyEvaluate(new EvaluationParameters(tileZoom + 1, {worldview}), canonical);
+    sizes.layoutIconSize = unevaluatedIconSize.possiblyEvaluate(new EvaluationParameters(tileZoom + 1, {worldview}), canonical);
+    sizes.textMaxSize = unevaluatedTextSize.possiblyEvaluate(new EvaluationParameters(18, {worldview}), canonical);
 
-    const textAlongLine = layout.get('text-rotation-alignment') === 'map' && layout.get('symbol-placement') !== 'point';
+    const symbolPlacement = layout.get('symbol-placement');
+    const textAlongLine = layout.get('text-rotation-alignment') === 'map' && symbolPlacement !== 'point';
     const textSize = layout.get('text-size');
 
     let hasAnySecondaryIcon = false;
-    for (const feature of bucket.features) {
-        if (feature.icon && feature.icon.nameSecondary) {
-            hasAnySecondaryIcon = true;
-            break;
-        }
-    }
+    const featureData = [];
 
     for (const feature of bucket.features) {
 
@@ -238,7 +255,7 @@ export function performSymbolLayout(bucket: SymbolBucket,
         const layoutTextSize = sizes.layoutTextSize.evaluate(feature, {}, canonical) * sizes.textScaleFactor;
         const layoutIconSize = sizes.layoutIconSize.evaluate(feature, {}, canonical) * sizes.iconScaleFactor;
 
-        const shapedTextOrientations = {
+        const shapedTextOrientations: ShapedTextOrientations = {
             horizontal: {},
             vertical: undefined
         };
@@ -256,7 +273,6 @@ export function performSymbolLayout(bucket: SymbolBucket,
             const variableTextAnchor = layout.get('text-variable-anchor');
 
             if (!variableTextAnchor) {
-
                 const radialOffset = layout.get('text-radial-offset').evaluate(feature, {}, canonical);
                 // Layers with variable anchors use the `text-radial-offset` property and the [x, y] offset vector
                 // is calculated at placement time instead of layout time
@@ -265,19 +281,17 @@ export function performSymbolLayout(bucket: SymbolBucket,
                     // but doesn't actually specify what happens if you use both. We go with the radial offset.
                     textOffset = evaluateVariableOffset(textAnchor, [radialOffset * ONE_EM, INVALID_TEXT_OFFSET]);
                 } else {
-
-                    textOffset = (layout.get('text-offset').evaluate(feature, {}, canonical).map(t => t * ONE_EM) as any);
+                    const evaluatedTextOffset = layout.get('text-offset').evaluate(feature, {}, canonical);
+                    textOffset = [evaluatedTextOffset[0] * ONE_EM, evaluatedTextOffset[1] * ONE_EM];
                 }
             }
 
             let textJustify = textAlongLine ?
                 "center" :
-
                 layout.get('text-justify').evaluate(feature, {}, canonical);
 
-            const isPointPlacement = layout.get('symbol-placement') === 'point';
+            const isPointPlacement = symbolPlacement === 'point';
             const maxWidth = isPointPlacement ?
-
                 layout.get('text-max-width').evaluate(feature, {}, canonical) * ONE_EM :
                 Infinity;
 
@@ -287,8 +301,7 @@ export function performSymbolLayout(bucket: SymbolBucket,
                     // writing mode, thus, default left justification is used. If Latin
                     // scripts would need to be supported, this should take into account other justifications.
                     shapedTextOrientations.vertical = shapeText(text, glyphMap, glyphPositions, imagePositions, fontstack, maxWidth, lineHeight, textAnchor,
-                        // @ts-expect-error - TS2345 - Argument of type 'number' is not assignable to parameter of type '2 | 1'.
-                                                                textJustify, spacingIfAllowed, textOffset, WritingMode.vertical, true, layoutTextSize, layoutTextSizeThisZoom);
+                                                                textJustify, spacingIfAllowed, textOffset, WritingMode.vertical, true, layoutTextSize, layoutTextSizeThisZoom, pixelRatio);
                 }
             };
 
@@ -311,8 +324,7 @@ export function performSymbolLayout(bucket: SymbolBucket,
                         // If using text-variable-anchor for the layer, we use a center anchor for all shapings and apply
                         // the offsets for the anchor in the placement step.
                         const shaping = shapeText(text, glyphMap, glyphPositions, imagePositions, fontstack, maxWidth, lineHeight, 'center',
-                            // @ts-expect-error - TS2345 - Argument of type 'number' is not assignable to parameter of type '2 | 1'.
-                                                  justification, spacingIfAllowed, textOffset, WritingMode.horizontal, false, layoutTextSize, layoutTextSizeThisZoom);
+                                                  justification, spacingIfAllowed, textOffset, WritingMode.horizontal, false, layoutTextSize, layoutTextSizeThisZoom, pixelRatio);
                         if (shaping) {
                             shapedTextOrientations.horizontal[justification] = shaping;
                             singleLine = shaping.positionedLines.length === 1;
@@ -329,8 +341,7 @@ export function performSymbolLayout(bucket: SymbolBucket,
 
                 if (isPointPlacement || ((layout.get("text-writing-mode").indexOf('horizontal') >= 0) || !allowsVerticalWritingMode(unformattedText))) {
                     const shaping = shapeText(text, glyphMap, glyphPositions, imagePositions, fontstack, maxWidth, lineHeight, textAnchor, textJustify, spacingIfAllowed,
-                        // @ts-expect-error - TS2345 - Argument of type 'number' is not assignable to parameter of type '2 | 1'.
-                                            textOffset, WritingMode.horizontal, false, layoutTextSize, layoutTextSizeThisZoom);
+                                            textOffset, WritingMode.horizontal, false, layoutTextSize, layoutTextSizeThisZoom, pixelRatio);
                     if (shaping) shapedTextOrientations.horizontal[textJustify] = shaping;
                 }
 
@@ -339,49 +350,191 @@ export function performSymbolLayout(bucket: SymbolBucket,
             }
         }
 
-        let shapedIcon;
+        let shapedIcon: PositionedIcon;
         let isSDFIcon = false;
-        if (feature.icon && feature.icon.namePrimary) {
-            const iconSizeFactor = getRasterizedIconSize(bucket.iconSizeData, unevaluatedLayoutValues['icon-size'], canonical, bucket.zoom, feature);
-            const scaleFactor = iconSizeFactor * sizes.iconScaleFactor * pixelRatio;
-            const primaryImageSerialized = feature.icon.getPrimary().scaleSelf(scaleFactor).serialize();
-            const image = imageMap[primaryImageSerialized];
-            if (image) {
+        let iconPrimary: ImageVariant;
+        let primaryImage: StyleImage;
+        let iconSecondary: ImageVariant;
+        let secondaryImage: StyleImage;
+        let iconOffset: [number, number];
+        let iconAnchor: SymbolAnchor;
+        const iconTextFit = layout.get('icon-text-fit').evaluate(feature, {}, canonical);
+        if (feature.icon && feature.icon.hasPrimary()) {
+            const icons = getScaledImageVariant(feature.icon, bucket.iconSizeData, unevaluatedLayoutValues['icon-size'], canonical, bucket.zoom, feature, pixelRatio, sizes.iconScaleFactor, worldview);
+            iconPrimary = icons.iconPrimary;
+            iconSecondary = icons.iconSecondary;
+            const primaryImageSerialized = iconPrimary.toString();
+            primaryImage = imageMap.get(primaryImageSerialized);
+            if (primaryImage) {
+                iconOffset = layout.get('icon-offset').evaluate(feature, {}, canonical);
+                iconAnchor = layout.get('icon-anchor').evaluate(feature, {}, canonical);
                 shapedIcon = shapeIcon(
-                    imagePositions[primaryImageSerialized],
-                    feature.icon.nameSecondary ? imagePositions[feature.icon.getSecondary().scaleSelf(scaleFactor).serialize()] : undefined,
-
-                    layout.get('icon-offset').evaluate(feature, {}, canonical),
-
-                    layout.get('icon-anchor').evaluate(feature, {}, canonical)
+                    imagePositions.get(primaryImageSerialized),
+                    iconSecondary ? imagePositions.get(iconSecondary.toString()) : undefined,
+                    iconOffset,
+                    iconAnchor
                 );
-                isSDFIcon = image.sdf;
+                isSDFIcon = primaryImage.sdf;
                 if (bucket.sdfIcons === undefined) {
-                    bucket.sdfIcons = image.sdf;
-                } else if (bucket.sdfIcons !== image.sdf) {
+                    bucket.sdfIcons = primaryImage.sdf;
+                } else if (bucket.sdfIcons !== primaryImage.sdf) {
                     warnOnce('Style sheet warning: Cannot mix SDF and non-SDF icons in one buffer');
                 }
-                if (image.pixelRatio !== bucket.pixelRatio) {
+                if (primaryImage.pixelRatio !== bucket.pixelRatio) {
                     bucket.iconsNeedLinear = true;
 
                 } else if (layout.get('icon-rotate').constantOr(1) !== 0) {
                     bucket.iconsNeedLinear = true;
                 }
             }
+
+            if (iconSecondary) {
+                const secondaryImageSerialized = iconSecondary.toString();
+                secondaryImage = imageMap.get(secondaryImageSerialized);
+            }
         }
+
+        hasAnySecondaryIcon = hasAnySecondaryIcon || !!(feature.icon && feature.icon.hasSecondary());
 
         const shapedText = getDefaultHorizontalShaping(shapedTextOrientations.horizontal) || shapedTextOrientations.vertical;
         if (!bucket.iconsInText) {
             bucket.iconsInText = shapedText ? shapedText.iconsInText : false;
         }
+
+        const glyphSize = ONE_EM,
+            fontScale = layoutTextSize * sizes.textScaleFactor / glyphSize;
+        const {defaultShapedIcon, verticallyShapedIcon} = fitIconsToText(bucket, shapedIcon, layout, feature, canonical, shapedTextOrientations, fontScale, iconOffset, iconTextFit);
+
+        if (iconTextFit !== 'none' && shapedIcon && (isFullyStretchableX(shapedIcon) || isFullyStretchableY(shapedIcon))) {
+            // For fully stretchable icons, we can rasterize them at the full resolution now that we know it
+            scaleShapedIconImage(defaultShapedIcon.imagePrimary, primaryImage, iconPrimary, shapedIcon, defaultShapedIcon, iconTextFit, imageRasterizationTasks, imageMap, imagePositions);
+            scaleShapedIconImage(defaultShapedIcon.imageSecondary, secondaryImage, iconSecondary, shapedIcon, defaultShapedIcon, iconTextFit, imageRasterizationTasks, imageMap, imagePositions);
+            if (verticallyShapedIcon) {
+                scaleShapedIconImage(verticallyShapedIcon.imagePrimary, primaryImage, iconPrimary, shapedIcon, verticallyShapedIcon, iconTextFit, imageRasterizationTasks, imageMap, imagePositions);
+                scaleShapedIconImage(verticallyShapedIcon.imageSecondary, secondaryImage, iconSecondary, shapedIcon, verticallyShapedIcon, iconTextFit, imageRasterizationTasks, imageMap, imagePositions);
+            }
+        }
+
+        shapedIcon = defaultShapedIcon;
+
+        featureData.push({feature, shapedTextOrientations, shapedText, shapedIcon, iconPrimary, iconSecondary, iconOffset, iconAnchor, verticallyShapedIcon, layoutTextSize, layoutIconSize, textOffset, isSDFIcon, iconTextFit});
+
+    }
+
+    return {featureData, sizes, hasAnySecondaryIcon, textAlongLine, symbolPlacement};
+
+}
+
+function scaleShapedIconImage(outImagePosition: ImagePosition, image: StyleImage, variant: ImageVariant, beforeFitIcon: PositionedIcon, afterFitIcon: PositionedIcon,
+    iconTextFit: IconTextFit, imageRasterizationTasks: ImageRasterizationTasks, imageMap: StyleImageMap<StringifiedImageVariant>, imagePositions: ImagePositionMap) {
+    if (!image || !image.usvg) return;
+
+    const beforeFitIconSize = getPositionedIconSize(beforeFitIcon);
+    const afterFitIconSize = getPositionedIconSize(afterFitIcon);
+    const widthMultiplier = (iconTextFit === 'both' || iconTextFit === 'width') && isFullyStretchableX(beforeFitIcon) ? (afterFitIconSize.width / beforeFitIconSize.width) : 1;
+    const heightMultiplier = (iconTextFit === 'both' || iconTextFit === 'height') && isFullyStretchableY(beforeFitIcon) ?  (afterFitIconSize.height / beforeFitIconSize.height) : 1;
+    variant.scaleSelf(widthMultiplier, heightMultiplier);
+
+    const scaledIconId = variant.toString();
+    imageRasterizationTasks.set(scaledIconId, variant);
+    imageMap.set(scaledIconId, image);
+    const {imagePosition} = getImagePosition(scaledIconId, image, ICON_PADDING);
+    imagePositions.set(scaledIconId, imagePosition);
+    outImagePosition = imagePosition;
+}
+
+function scaleImageVariant(image: ImageVariant | null, iconSizeData: SizeData, iconSize: PropertyValue<number, PossiblyEvaluatedPropertyValue<number>>, tileID: CanonicalTileID, zoom: number, feature: SymbolFeature, pixelRatio: number, iconScaleFactor: number, worldview: string | undefined) {
+    if (!image) return undefined;
+    const iconSizeFactor = getRasterizedIconSize(iconSizeData, iconSize, tileID, zoom, feature, worldview);
+    const scaleFactor = iconSizeFactor * iconScaleFactor * pixelRatio;
+    return image.scaleSelf(scaleFactor);
+}
+
+export function getScaledImageVariant(icon: ResolvedImage, iconSizeData: SizeData, iconSize: PropertyValue<number, PossiblyEvaluatedPropertyValue<number>>, tileID: CanonicalTileID, zoom: number, feature: SymbolFeature, pixelRatio: number, iconScaleFactor: number, worldview: string | undefined) {
+    const iconPrimary = scaleImageVariant(icon.getPrimary(), iconSizeData, iconSize, tileID, zoom, feature, pixelRatio, iconScaleFactor, worldview);
+    const iconSecondary = scaleImageVariant(icon.getSecondary(), iconSizeData, iconSize, tileID, zoom, feature, pixelRatio, iconScaleFactor, worldview);
+    return {iconPrimary, iconSecondary};
+}
+
+export function checkCrossFadeImagePositions(primary: ImageVariant, secondary: ImageVariant, iconPositions: ImagePositionMap) {
+    if (!secondary) return;
+    const primaryPosition = iconPositions.get(primary.toString());
+    const secondaryPosition = iconPositions.get(secondary.toString());
+
+    if (!secondaryPosition) {
+        return;
+    }
+
+    if (primaryPosition.paddedRect.w !== secondaryPosition.paddedRect.w ||
+        primaryPosition.paddedRect.h !== secondaryPosition.paddedRect.h) {
+        warnOnce(`Mismatch in icon variant sizes: ${primary.toString()} and ${secondary.toString()}`);
+    }
+
+    if (primaryPosition.usvg !== secondaryPosition.usvg) {
+        warnOnce(`Mismatch in icon variant image types: ${primary.id} and ${secondary.id}`);
+    }
+}
+
+export function postRasterizationSymbolLayout(bucket: SymbolBucket, bucketData: SymbolBucketData, showCollisionBoxes: boolean,
+    availableImages: ImageId[], canonical: CanonicalTileID, tileZoom: number, projection: Projection, brightness: number | null, imageMap: StyleImageMap<StringifiedImageVariant>, imageAtlas: ImageAtlas) {
+
+    const {featureData, hasAnySecondaryIcon, sizes, textAlongLine, symbolPlacement} = bucketData;
+
+    for (const data of featureData) {
+        const {shapedIcon, verticallyShapedIcon, feature, shapedTextOrientations, shapedText, layoutTextSize, layoutIconSize,
+            textOffset, isSDFIcon, iconPrimary, iconSecondary, iconTextFit, iconOffset} = data;
+
+        // Image positions in shapedIcon and shapedText need to be updated since after rasterization, positions in the atlas will have
+        // changed
+        reconcileImagePosition(shapedIcon, imageAtlas.iconPositions, iconPrimary, iconSecondary);
+        reconcileImagePosition(verticallyShapedIcon, imageAtlas.iconPositions, iconPrimary, iconSecondary);
+        reconcileTextImagePositions(shapedTextOrientations, imageAtlas.iconPositions);
+        checkCrossFadeImagePositions(iconPrimary, iconSecondary, imageAtlas.iconPositions);
+
         if (shapedText || shapedIcon) {
-            // @ts-expect-error - TS2345 - Argument of type 'Record<string, any>' is not assignable to parameter of type 'Sizes'.
-            addFeature(bucket, feature, shapedTextOrientations, shapedIcon, imageMap, sizes, layoutTextSize, layoutIconSize, textOffset, isSDFIcon, availableImages, canonical, projection, brightness, hasAnySecondaryIcon);
+            addFeature(bucket, feature, shapedTextOrientations, shapedIcon, verticallyShapedIcon, imageMap, sizes, layoutTextSize,
+                layoutIconSize, textOffset, isSDFIcon, availableImages, canonical, projection, brightness, hasAnySecondaryIcon, iconTextFit,
+                iconOffset, textAlongLine, symbolPlacement);
         }
     }
 
     if (showCollisionBoxes) {
         bucket.generateCollisionDebugBuffers(tileZoom, bucket.collisionBoxArray, sizes.textScaleFactor);
+    }
+}
+
+function reconcileImagePosition(shapedIcon: PositionedIcon, atlasIconPositions: ImagePositionMap, iconPrimary: ImageVariant, iconSecondary: ImageVariant) {
+    if (!shapedIcon) return;
+
+    const primaryImagePosition = atlasIconPositions.get(iconPrimary.toString());
+    shapedIcon.imagePrimary = primaryImagePosition;
+    if (iconSecondary) {
+        const secondaryImagePosition = atlasIconPositions.get(iconSecondary.toString());
+        shapedIcon.imageSecondary = secondaryImagePosition;
+    }
+}
+
+function reconcileTextImagePositions(shapedTextOrientations: ShapedTextOrientations, atlasIconPositions: ImagePositionMap) {
+    // Image position in shapedIcon needs to be updated since after rasterization, positions in the atlas might have
+    // changed
+
+    for (const orientation in shapedTextOrientations.horizontal) {
+        reconcileTextOrientationImagePositions(shapedTextOrientations.horizontal[orientation], atlasIconPositions);
+    }
+
+    reconcileTextOrientationImagePositions(shapedTextOrientations.vertical, atlasIconPositions);
+}
+
+function reconcileTextOrientationImagePositions(shapedText: Shaping | null, atlasIconPositions: ImagePositionMap) {
+    if (!shapedText) return;
+
+    for (const line of shapedText.positionedLines) {
+        for (const glyph of line.positionedGlyphs) {
+            if (glyph.image !== null) {
+                const imageId = glyph.image.toString();
+                glyph.rect = atlasIconPositions.get(imageId).paddedRect;
+            }
+        }
     }
 }
 
@@ -414,6 +567,29 @@ function tilePixelRatioForSymbolSpacing(overscaleFactor: number, overscaledZ: nu
     return Math.max(tilePixelRatio, 1);
 }
 
+type IconTextFit = "none" | "height" | "width" | "both";
+
+function fitIconsToText(bucket: SymbolBucket, shapedIcon: PositionedIcon | undefined, layout: PossiblyEvaluated<LayoutProps>, feature: SymbolFeature,
+    canonical: CanonicalTileID, shapedTextOrientations: ShapedTextOrientations, fontScale: number,
+    iconOffset: [number, number], iconTextFit: IconTextFit): {defaultShapedIcon: PositionedIcon, verticallyShapedIcon: PositionedIcon | undefined} {
+    const defaultShaping = getDefaultHorizontalShaping(shapedTextOrientations.horizontal) || shapedTextOrientations.vertical;
+    const iconTextFitPadding = layout.get('icon-text-fit-padding').evaluate(feature, {}, canonical);
+    const hasIconTextFit = iconTextFit !== 'none';
+    let defaultShapedIcon = shapedIcon;
+    let verticallyShapedIcon;
+    if (shapedIcon && hasIconTextFit) {
+        if (bucket.allowVerticalPlacement && shapedTextOrientations.vertical) {
+            verticallyShapedIcon = fitIconToText(shapedIcon, shapedTextOrientations.vertical, iconTextFit,
+                iconTextFitPadding, iconOffset, fontScale);
+        }
+        if (defaultShaping) {
+            defaultShapedIcon = fitIconToText(shapedIcon, defaultShaping, iconTextFit,
+                                       iconTextFitPadding, iconOffset, fontScale);
+        }
+    }
+    return {defaultShapedIcon, verticallyShapedIcon};
+}
+
 /**
  * Given a feature and its shaped text and icon data, add a 'symbol
  * instance' for each _possible_ placement of the symbol feature.
@@ -423,21 +599,24 @@ function tilePixelRatioForSymbolSpacing(overscaleFactor: number, overscaledZ: nu
  */
 function addFeature(bucket: SymbolBucket,
                     feature: SymbolFeature,
-                    shapedTextOrientations: any,
+                    shapedTextOrientations: ShapedTextOrientations,
                     shapedIcon: PositionedIcon | undefined,
-                    imageMap: {
-                        [_: string]: StyleImage;
-                    },
+                    verticallyShapedIcon: PositionedIcon | undefined,
+                    imageMap: StyleImageMap<StringifiedImageVariant>,
                     sizes: Sizes,
                     layoutTextSize: number,
                     layoutIconSize: number,
                     textOffset: [number, number],
                     isSDFIcon: boolean,
-                    availableImages: Array<string>,
+                    availableImages: ImageId[],
                     canonical: CanonicalTileID,
                     projection: Projection,
                     brightness: number | null | undefined,
-                    hasAnySecondaryIcon: boolean) {
+                    hasAnySecondaryIcon: boolean,
+                    iconTextFit: "none" | "width" | "height" | "both",
+                    iconOffset: [number, number],
+                    textAlongLine: boolean,
+                    symbolPlacement: "point" | "line" | "line-center") {
     // To reduce the number of labels that jump around when zooming we need
     // to use a text-size value that is the same for all zoom levels.
     // bucket calculates text-size at a high zoom level so that all tiles can
@@ -450,47 +629,26 @@ function addFeature(bucket: SymbolBucket,
     }
     const layout = bucket.layers[0].layout;
 
-    const iconOffset = layout.get('icon-offset').evaluate(feature, {}, canonical);
     const defaultShaping = getDefaultHorizontalShaping(shapedTextOrientations.horizontal) || shapedTextOrientations.vertical;
     const isGlobe = projection.name === 'globe';
 
     const glyphSize = ONE_EM,
-        fontScale = layoutTextSize * sizes.textScaleFactor / glyphSize,
         textMaxBoxScale = bucket.tilePixelRatio * textMaxSize / glyphSize,
         iconBoxScale = bucket.tilePixelRatio * layoutIconSize,
-
         symbolMinDistance = tilePixelRatioForSymbolSpacing(bucket.overscaling, bucket.zoom) * layout.get('symbol-spacing'),
-
         textPadding = layout.get('text-padding') * bucket.tilePixelRatio,
-
         iconPadding = layout.get('icon-padding') * bucket.tilePixelRatio,
-
         textMaxAngle = degToRad(layout.get('text-max-angle')),
-        textAlongLine = layout.get('text-rotation-alignment') === 'map' && layout.get('symbol-placement') !== 'point',
-        iconAlongLine = layout.get('icon-rotation-alignment') === 'map' && layout.get('symbol-placement') !== 'point',
-        symbolPlacement = layout.get('symbol-placement'),
+        iconAlongLine = layout.get('icon-rotation-alignment') === 'map' && symbolPlacement !== 'point',
         textRepeatDistance = symbolMinDistance / 2;
 
-    const iconTextFit = layout.get('icon-text-fit').evaluate(feature, {}, canonical);
-
-    const iconTextFitPadding = layout.get('icon-text-fit-padding').evaluate(feature, {}, canonical);
     const hasIconTextFit = iconTextFit !== 'none';
     if (bucket.hasAnyIconTextFit === false && hasIconTextFit) {
         bucket.hasAnyIconTextFit = true;
     }
-    let verticallyShapedIcon;
 
-    // Adjust shaped icon size when icon-text-fit is used.
-    if (shapedIcon && hasIconTextFit) {
-        if (bucket.allowVerticalPlacement && shapedTextOrientations.vertical) {
-            verticallyShapedIcon = fitIconToText(shapedIcon, shapedTextOrientations.vertical, iconTextFit,
-                iconTextFitPadding, iconOffset, fontScale);
-        }
-        if (defaultShaping) {
-            shapedIcon = fitIconToText(shapedIcon, defaultShaping, iconTextFit,
-                                       iconTextFitPadding, iconOffset, fontScale);
-        }
-    }
+    const elevationFeatureId = feature.properties ? +feature.properties[PROPERTY_ELEVATION_ID] : null;
+    const elevationFeatureIndex = elevationFeatureId && bucket.elevationFeatureIdToIndex ? bucket.elevationFeatureIdToIndex.get(elevationFeatureId) : 0xffff;
 
     const addSymbolAtAnchor = (line: Array<Point>, anchor: Anchor, canonicalId: CanonicalTileID) => {
         if (anchor.x < 0 || anchor.x >= EXTENT || anchor.y < 0 || anchor.y >= EXTENT) {
@@ -512,15 +670,17 @@ function addFeature(bucket: SymbolBucket,
             };
         }
 
-        addSymbol(bucket, anchor, globe, line, shapedTextOrientations, shapedIcon, imageMap, verticallyShapedIcon, bucket.layers[0],
+        addSymbol(bucket, anchor, globe, line, shapedTextOrientations,
+            shapedIcon, imageMap, verticallyShapedIcon, bucket.layers[0],
             bucket.collisionBoxArray, feature.index, feature.sourceLayerIndex,
             bucket.index, textPadding, textAlongLine, textOffset,
             iconBoxScale, iconPadding, iconAlongLine, iconOffset,
-            feature, sizes, isSDFIcon, availableImages, canonical, brightness, hasAnySecondaryIcon);
+            feature, sizes, isSDFIcon, availableImages, canonical,
+            brightness, hasAnySecondaryIcon, iconTextFit, elevationFeatureIndex);
     };
 
     if (symbolPlacement === 'line') {
-        for (const line of clipLine(feature.geometry, 0, 0, EXTENT, EXTENT)) {
+        for (const line of clipLines(feature.geometry, 0, 0, EXTENT, EXTENT)) {
             const anchors = getAnchors(
                 line,
                 symbolMinDistance,
@@ -580,6 +740,8 @@ const MAX_GLYPH_ICON_SIZE = 255;
 const MAX_PACKED_SIZE = MAX_GLYPH_ICON_SIZE * SIZE_PACK_FACTOR;
 export {MAX_PACKED_SIZE};
 
+type PlacementTypes = 'vertical' | 'center' | 'left' | 'right';
+
 function addTextVertices(bucket: SymbolBucket,
                          globe: {
                              anchor: Anchor;
@@ -587,9 +749,7 @@ function addTextVertices(bucket: SymbolBucket,
                          } | null | undefined,
                          tileAnchor: Anchor,
                          shapedText: Shaping,
-                         imageMap: {
-                             [_: string]: StyleImage;
-                         },
+                         imageMap: StyleImageMap<StringifiedImageVariant>,
                          layer: SymbolStyleLayer,
                          textAlongLine: boolean,
                          feature: SymbolFeature,
@@ -599,20 +759,18 @@ function addTextVertices(bucket: SymbolBucket,
                              lineLength: number;
                          },
                          writingMode: number,
-                         placementTypes: Array<'vertical' | 'center' | 'left' | 'right'>,
-                         placedTextSymbolIndices: {
-                             [_: string]: number;
-                         },
+                         placementTypes: Array<PlacementTypes>,
+                         placedTextSymbolIndices: Record<string, number>,
                          placedIconIndex: number,
                          sizes: Sizes,
-                         availableImages: Array<string>,
+                         availableImages: ImageId[],
                          canonical: CanonicalTileID,
                          brightness?: number | null) {
     const glyphQuads = getGlyphQuads(tileAnchor, shapedText, textOffset,
                             layer, textAlongLine, feature, imageMap, bucket.allowVerticalPlacement);
 
     const sizeData = bucket.textSizeData;
-    let textSizeData = null;
+    let textSizeData: number[] = null;
 
     if (sizeData.kind === 'source') {
         textSizeData = [
@@ -661,7 +819,9 @@ function addTextVertices(bucket: SymbolBucket,
 function getDefaultHorizontalShaping(horizontalShaping: Partial<Record<TextJustify, Shaping>>): Shaping | null {
     // We don't care which shaping we get because this is used for collision purposes
     // and all the justifications have the same collision box
+    // eslint-disable-next-line no-unreachable-loop
     for (const justification in horizontalShaping) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         return horizontalShaping[justification];
     }
     return null;
@@ -674,7 +834,7 @@ export function evaluateBoxCollisionFeature(
     featureIndex: number,
     sourceLayerIndex: number,
     bucketIndex: number,
-    shaped: any,
+    shaped: Shaping | PositionedIcon,
     padding: number,
     rotate: number,
     textOffset?: [number, number] | null
@@ -684,8 +844,8 @@ export function evaluateBoxCollisionFeature(
     let x1 = shaped.left;
     let x2 = shaped.right;
 
-    const collisionPadding = shaped.collisionPadding;
-    if (collisionPadding) {
+    if (isPositionedIcon(shaped) && shaped.collisionPadding) {
+        const collisionPadding = shaped.collisionPadding;
         x1 -= collisionPadding[0];
         y1 -= collisionPadding[1];
         x2 += collisionPadding[2];
@@ -728,8 +888,8 @@ export function evaluateBoxCollisionFeature(
     return collisionBoxArray.length - 1;
 }
 
-export function evaluateCircleCollisionFeature(shaped: any): number | null {
-    if (shaped.collisionPadding) {
+export function evaluateCircleCollisionFeature(shaped: Shaping | PositionedIcon): number | null {
+    if (isPositionedIcon(shaped) && shaped.collisionPadding) {
         // Compute height of the shape in glyph metrics and apply padding.
         // Note that the pixel based 'text-padding' is applied at runtime
         shaped.top -= shaped.collisionPadding[1];
@@ -753,11 +913,9 @@ function addSymbol(bucket: SymbolBucket,
                        up: vec3;
                    } | null | undefined,
                    line: Array<Point>,
-                   shapedTextOrientations: any,
+                   shapedTextOrientations: ShapedTextOrientations,
                    shapedIcon: PositionedIcon | undefined,
-                   imageMap: {
-                       [_: string]: StyleImage;
-                   },
+                   imageMap: StyleImageMap<StringifiedImageVariant>,
                    verticallyShapedIcon: PositionedIcon | undefined,
                    layer: SymbolStyleLayer,
                    collisionBoxArray: CollisionBoxArray,
@@ -774,10 +932,12 @@ function addSymbol(bucket: SymbolBucket,
                    feature: SymbolFeature,
                    sizes: Sizes,
                    isSDFIcon: boolean,
-                   availableImages: Array<string>,
+                   availableImages: ImageId[],
                    canonical: CanonicalTileID,
                    brightness: number | null | undefined,
-                   hasAnySecondaryIcon: boolean) {
+                   hasAnySecondaryIcon: boolean,
+                   iconTextFit: "none" | "width" | "height" | "both",
+                   elevationFeatureIndex: number) {
     const lineArray = bucket.addToLineVertexArray(anchor, line);
     let textBoxIndex, iconBoxIndex, verticalTextBoxIndex, verticalIconBoxIndex;
     let textCircle, verticalTextCircle, verticalIconCircle;
@@ -788,19 +948,19 @@ function addSymbol(bucket: SymbolBucket,
     let numVerticalGlyphVertices = 0;
     let placedIconSymbolIndex = -1;
     let verticalPlacedIconSymbolIndex = -1;
-    const placedTextSymbolIndices: Record<string, any> = {};
+    const placedTextSymbolIndices: Record<string, number> = {};
     let key = murmur3('');
     const collisionFeatureAnchor: Anchor = globe ? globe.anchor : anchor;
 
-    const hasIconTextFit = layer.layout.get('icon-text-fit').evaluate(feature, {}, canonical) !== 'none';
+    const hasIconTextFit = iconTextFit !== 'none';
 
     let textOffset0 = 0;
     let textOffset1 = 0;
     if (layer._unevaluatedLayout.getValue('text-radial-offset') === undefined) {
-
-        [textOffset0, textOffset1] = (layer.layout.get('text-offset').evaluate(feature, {}, canonical).map(t => t * ONE_EM) as any);
+        const evaluatedTextOffset = layer.layout.get('text-offset').evaluate(feature, {}, canonical);
+        textOffset0 = evaluatedTextOffset[0] * ONE_EM;
+        textOffset1 = evaluatedTextOffset[1] * ONE_EM;
     } else {
-
         textOffset0 = layer.layout.get('text-radial-offset').evaluate(feature, {}, canonical) * ONE_EM;
         textOffset1 = INVALID_TEXT_OFFSET;
     }
@@ -861,7 +1021,7 @@ function addSymbol(bucket: SymbolBucket,
             iconOffset,
             iconAlongLine,
             feature,
-            false,
+            undefined,
             globe,
             anchor,
             lineArray.lineStartIndex,
@@ -901,7 +1061,8 @@ function addSymbol(bucket: SymbolBucket,
         }
     }
 
-    for (const justification in shapedTextOrientations.horizontal) {
+    for (const placement in shapedTextOrientations.horizontal) {
+        const justification = placement as PlacementTypes;
         const shaping = shapedTextOrientations.horizontal[justification];
 
         if (!textBoxIndex) {
@@ -921,7 +1082,7 @@ function addSymbol(bucket: SymbolBucket,
         numHorizontalGlyphVertices += addTextVertices(
             bucket, globe, anchor, shaping, imageMap, layer, textAlongLine, feature, textOffset, lineArray,
             shapedTextOrientations.vertical ? WritingMode.horizontal : WritingMode.horizontalOnly,
-            singleLine ? (Object.keys(shapedTextOrientations.horizontal) as any) : [justification],
+            singleLine ? keys(shapedTextOrientations.horizontal) : [justification],
             placedTextSymbolIndices, placedIconSymbolIndex, sizes, availableImages, canonical, brightness);
 
         if (singleLine) {
@@ -993,10 +1154,11 @@ function addSymbol(bucket: SymbolBucket,
         collisionCircleDiameter,
         0,
         hasIconTextFit ? 1 : 0,
+        elevationFeatureIndex,
     );
 }
 
-function anchorIsTooClose(bucket: any, text: string, repeatDistance: number, anchor: Point) {
+function anchorIsTooClose(bucket: SymbolBucket, text: string, repeatDistance: number, anchor: Point) {
     const compareText = bucket.compareText;
     if (!(text in compareText)) {
         compareText[text] = [];

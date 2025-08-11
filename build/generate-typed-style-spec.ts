@@ -90,37 +90,34 @@ function tsObjectDeclaration(key, properties, overrides = {}) {
         experimentalTag = tag('@experimental', 'This is experimental and subject to change in future versions.');
     }
 
-    const objectDeclaration = `export type ${key} = ${tsObject(properties, '', overrides)}`;
+    const objectDeclaration = `export type ${key} = ${tsObject(properties, '', overrides)};`;
     return experimentalTag ? [experimentalTag, objectDeclaration].join('\n') : objectDeclaration;
 }
 
 function tsObject(properties, indent, overrides = {}) {
     return `{
 ${Object.keys(properties)
-        .map(k => {
-            const property = `    ${indent}${tsProperty(k, properties[k], overrides[k])}`;
+        .flatMap(k => {
+            let property = `    ${indent}${tsProperty(k, properties[k], overrides[k])}`;
 
-            if( properties[k].type === 'color') {
-
-                if (properties[k].transition) {
-                    const propertyTransition = `    ${indent}"${k}-transition"?: TransitionSpecification` + `,\n    ${indent}"${k}-use-theme"?: PropertyValueSpecification<string>`;
-                    return [property, propertyTransition].join(',\n');
-                }
-                else {
-                    const propertyUseTheme = `    ${indent}"${k}-use-theme"?: PropertyValueSpecification<string>`;
-                    return [property, propertyUseTheme].join(',\n');
-                }
+            if (properties[k].experimental) {
+                const experimentalTag = tag('@experimental', 'This property is experimental and subject to change in future versions.', `    ${indent}`);
+                property = [experimentalTag, property].join('\n');
             }
-            
+
+            const result = [property];
+
             if (properties[k].transition) {
                 const propertyTransition = `    ${indent}"${k}-transition"?: TransitionSpecification`;
-                return [property, propertyTransition].join(',\n');
-            } else if (properties[k].experimental) {
-                const experimentalTag = tag('@experimental', 'This property is experimental and subject to change in future versions.', `    ${indent}`);
-                return [experimentalTag, property].join('\n');
-            } else {
-                return property;
+                result.push(propertyTransition);
             }
+
+            if (properties[k]['use-theme']) {
+                const propertyUseTheme = `    ${indent}"${k}-use-theme"?: PropertyValueSpecification<string>`;
+                result.push(propertyUseTheme);
+            }
+
+            return result;
         })
         .join(',\n')}
 ${indent}}`;
@@ -284,20 +281,21 @@ export type FunctionSpecification<T> = {
 };
 
 export type CameraFunctionSpecification<T> =
-    | { type: 'exponential', stops: Array<[number, T]> }
-    | { type: 'interval',    stops: Array<[number, T]> };
+    | {type: 'exponential', stops: Array<[number, T]>}
+    | {type: 'interval',    stops: Array<[number, T]>};
 
 export type SourceFunctionSpecification<T> =
-    | { type: 'exponential', stops: Array<[number, T]>, property: string, default?: T }
-    | { type: 'interval',    stops: Array<[number, T]>, property: string, default?: T }
-    | { type: 'categorical', stops: Array<[string | number | boolean, T]>, property: string, default?: T }
-    | { type: 'identity', property: string, default?: T };
+    | {type: 'exponential', stops: Array<[number, T]>, property: string, default?: T}
+    | {type: 'interval',    stops: Array<[number, T]>, property: string, default?: T}
+    | {type: 'categorical', stops: Array<[string | number | boolean, T]>, property: string, default?: T}
+    | {type: 'identity', property: string, default?: T};
 
 export type CompositeFunctionSpecification<T> =
-    | { type: 'exponential', stops: Array<[{zoom: number, value: number}, T]>, property: string, default?: T }
-    | { type: 'interval',    stops: Array<[{zoom: number, value: number}, T]>, property: string, default?: T }
-    | { type: 'categorical', stops: Array<[{zoom: number, value: string | number | boolean}, T]>, property: string, default?: T };
+    | {type: 'exponential', stops: Array<[{zoom: number, value: number}, T]>, property: string, default?: T}
+    | {type: 'interval',    stops: Array<[{zoom: number, value: number}, T]>, property: string, default?: T}
+    | {type: 'categorical', stops: Array<[{zoom: number, value: string | number | boolean}, T]>, property: string, default?: T};
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type ExpressionSpecification = [string, ...any[]];
 
 export type PropertyValueSpecification<T> =
@@ -319,6 +317,8 @@ ${tsObjectDeclaration('StyleSpecification', spec.$root)}
 ${tsObjectDeclaration('SourcesSpecification', spec.sources)}
 
 ${tsObjectDeclaration('ModelsSpecification', spec.models)}
+
+${tsObjectDeclaration('IconsetsSpecification', spec.iconsets)}
 
 ${tsObjectDeclaration('LightSpecification', spec.light)}
 
@@ -354,6 +354,8 @@ ${tsObjectDeclaration('SelectorSpecification', spec.selector)}
 
 ${tsObjectDeclaration('SelectorPropertySpecification', spec.selectorProperty)}
 
+${tsObjectDeclaration('AppearanceSpecification', spec.appearance)}
+
 ${spec.source.map(key => {
         const sourceSpecName = tsSourceSpecificationTypeName(key);
         if (sourceSpecName === 'GeoJSONSourceSpecification') {
@@ -364,7 +366,10 @@ ${spec.source.map(key => {
     }).join('\n\n')}
 
 export type SourceSpecification =
-${spec.source.map(key => `    | ${tsSourceSpecificationTypeName(key)}`).join('\n')}
+${spec.source.map(key => `    | ${tsSourceSpecificationTypeName(key)}`).join('\n')};
+
+export type IconsetSpecification =
+${spec.iconset.map(key => `    | ${tsObject(spec[key], '    ')}`).join('\n')};
 
 export type ModelSpecification = ${tsType(spec.model)};
 

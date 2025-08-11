@@ -11,12 +11,12 @@ import type Painter from '../render/painter';
 import type IndexBuffer from '../gl/index_buffer';
 import type VertexBuffer from '../gl/vertex_buffer';
 
-export type VignetteParams={
+export type VignetteParams = {
     strength: number,
     start: number,
     range: number,
     fadePower: number,
-    color: { r: number, g: number, b: number, a: number },
+    color: {r: number, g: number, b: number, a: number},
 };
 
 export function createTpBindings(params: VignetteParams, painter: Painter, scope: string[]) {
@@ -69,15 +69,15 @@ export class Vignette {
             painter.uploadCommonUniforms(painter.context, program);
 
             const uniforms = vignetteUniformValues({
-                vignetteShape:[params.start, params.range, Math.pow(10.0, params.fadePower)],
-                vignetteColor:[params.color.r, params.color.g, params.color.b, params.color.a * params.strength],
+                vignetteShape: [params.start, params.range, Math.pow(10.0, params.fadePower)],
+                vignetteColor: [params.color.r, params.color.g, params.color.b, params.color.a * params.strength],
             });
 
             const gl = painter.context.gl;
 
             program.draw(painter, gl.TRIANGLES, DepthMode.disabled, StencilMode.disabled,
                     ColorMode.alphaBlended, CullFaceMode.disabled, uniforms, "vignette",
-                    this.vignetteVx, this.vignetteIdx, vignetteSegments, {});
+                    this.vignetteVx, this.vignetteIdx, vignetteSegments);
         }
     }
 }

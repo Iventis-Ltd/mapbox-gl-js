@@ -11,39 +11,41 @@ import {mulberry32} from '../style-spec/util/random';
 import {snowLayout} from "./snow_attributes";
 import {PrecipitationRevealParams} from './precipitation_reveal_params';
 import {createTpBindings} from './vignette';
-import {type VignetteParams} from './vignette';
 import {boxWrap, generateUniformDistributedPointsInsideCube, lerpClamp, PrecipitationBase} from './common';
 import {Debug} from '../util/debug';
 
-import type Painter from '../render/painter';
 import type {vec2, vec4} from 'gl-matrix';
+import type Painter from '../render/painter';
+import type {VignetteParams} from './vignette';
+
+type SnowParams = {
+    overrideStyleParameters: boolean;
+    intensity: number;
+    timeFactor: number;
+    velocityConeAperture: number;
+    velocity: number;
+    horizontalOscillationRadius: number;
+    horizontalOscillationRate: number;
+    boxSize: number;
+    billboardSize: number;
+    shapeFadeStart: number;
+    shapeFadePower: number;
+    screenThinning:{
+        intensity: number;
+        start: number;
+        range: number;
+        fadePower: number;
+        affectedRatio: number;
+        particleOffset: number;
+    },
+    color: {r: number; g: number; b: number; a: number};
+    direction: {x: number; y: number},
+};
 
 export class Snow extends PrecipitationBase {
     _revealParams: PrecipitationRevealParams;
 
-    _params: {
-        overrideStyleParameters: boolean,
-        intensity: number,
-        timeFactor: number,
-        velocityConeAperture: number,
-        velocity: number,
-        horizontalOscillationRadius: number,
-        horizontalOscillationRate: number,
-        boxSize: number,
-        billboardSize: number,
-        shapeFadeStart: number,
-        shapeFadePower: number,
-        screenThinning:{
-            intensity: number,
-            start: number,
-            range: number,
-            fadePower: number,
-            affectedRatio: number,
-            particleOffset: number
-        },
-        color: { r: number, g: number, b: number, a: number },
-        direction: {x: number, y: number},
-    };
+    _params: SnowParams;
 
     _vignetteParams: VignetteParams;
 
@@ -211,7 +213,7 @@ export class Snow extends PrecipitationBase {
 
         painter.uploadCommonUniforms(context, program);
 
-        const drawParticlesBox = (boxSize: number, sizeScale: number, dp: any) => {
+        const drawParticlesBox = (boxSize: number, sizeScale: number, dp: SnowParams) => {
             const camPos = boxWrap(this._movement.getPosition(), boxSize);
 
             const thinningX = tr.width  / 2;
@@ -249,7 +251,7 @@ export class Snow extends PrecipitationBase {
             if (this.particlesVx && this.particlesIdx) {
                 program.draw(painter, gl.TRIANGLES, DepthMode.disabled, StencilMode.disabled,
                 ColorMode.alphaBlended, CullFaceMode.disabled, uniforms, "snow_particles",
-                this.particlesVx, this.particlesIdx, particlesSegments, {});
+                this.particlesVx, this.particlesIdx, particlesSegments);
             }
         };
 

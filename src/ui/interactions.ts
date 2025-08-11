@@ -2,6 +2,7 @@ import {Event} from '../util/evented';
 import {TargetFeature} from '../util/vectortile_to_geojson';
 import featureFilter from '../style-spec/feature_filter/index';
 import {shouldSkipFeatureVariant, getFeatureTargetKey, type QrfTarget} from '../source/query_features';
+import {warnOnce} from '../util/util';
 
 import type Point from '@mapbox/point-geometry';
 import type LngLat from '../geo/lng_lat';
@@ -9,7 +10,7 @@ import type Feature from '../util/vectortile_to_geojson';
 import type {FeatureFilter} from '../style-spec/feature_filter/index';
 import type {Map as MapboxMap} from './map';
 import type {FilterSpecification} from '../style-spec/types';
-import type {TargetDescriptor} from '../util/vectortile_to_geojson';
+import type {TargetDescriptor, FeaturesetDescriptor} from '../util/vectortile_to_geojson';
 import type {MapEvents, MapInteractionEventType, MapMouseEvent} from './events';
 
 /**
@@ -40,6 +41,7 @@ export type Interaction = {
 
     /**
      * A function that will be called when the interaction is triggered.
+     *
      * @param {InteractionEvent} event The event object.
      * @returns
      */
@@ -227,12 +229,18 @@ export class InteractionSet {
     }
 
     handleType(event: MapMouseEvent, features?: Feature[]) {
+        const isMouseEnter = event.type === 'mouseenter';
+
+        if (isMouseEnter && !this.interactionsByType.has(event.type)) {
+            warnOnce(`mouseenter interaction required for mouseleave to work.`);
+            return;
+        }
+
         // The interactions are handled in reverse order of addition,
         // so that the last added interaction to the same target handles it first.
         const interactions = Array.from(this.interactionsByType.get(event.type)).reverse();
         const delegated = !!features;
         features = features || this.queryTargets(event.point, interactions);
-        const isMouseEnter = event.type === 'mouseenter';
 
         let eventHandled = false;
         const uniqueFeatureSet = new Set<string>();

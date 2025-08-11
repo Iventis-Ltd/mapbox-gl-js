@@ -11,7 +11,7 @@ export default function validateTerrain(options: ValidationOptions): Array<Valid
     const style = options.style;
     const styleSpec = options.styleSpec;
     const terrainSpec = styleSpec.terrain;
-    let errors = [];
+    let errors: ValidationError[] = [];
 
     const rootType = getType(terrain);
     if (terrain === undefined) {
@@ -31,7 +31,7 @@ export default function validateTerrain(options: ValidationOptions): Array<Valid
             errors = errors.concat(validate({
                 key,
                 value: terrain[key],
-                valueSpec: {type:'string'},
+                valueSpec: {type: 'string'},
                 style,
                 styleSpec
             }));

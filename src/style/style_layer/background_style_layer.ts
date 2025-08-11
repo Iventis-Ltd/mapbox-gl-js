@@ -6,8 +6,11 @@ import type {PaintProps} from './background_style_layer_properties';
 import type {LayerSpecification} from '../../style-spec/types';
 import type {CreateProgramParams} from '../../render/painter';
 import type {LUT} from "../../util/lut";
+import type {ProgramName} from '../../render/program';
 
 class BackgroundStyleLayer extends StyleLayer {
+    override type: 'background';
+
     override _transitionablePaint: Transitionable<PaintProps>;
     override _transitioningPaint: Transitioning<PaintProps>;
     override paint: PossiblyEvaluated<PaintProps>;
@@ -20,7 +23,7 @@ class BackgroundStyleLayer extends StyleLayer {
         super(layer, properties, scope, lut, options);
     }
 
-    override getProgramIds(): Array<string> {
+    override getProgramIds(): ProgramName[] {
         const image = this.paint.get('background-pattern');
         return [image ? 'backgroundPattern' : 'background'];
     }
@@ -31,7 +34,7 @@ class BackgroundStyleLayer extends StyleLayer {
         };
     }
 
-    override is3D(): boolean {
+    override is3D(terrainEnabled?: boolean): boolean {
         return this.paint.get('background-pitch-alignment') === 'viewport';
     }
 }

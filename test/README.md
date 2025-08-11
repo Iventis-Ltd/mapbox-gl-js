@@ -1,4 +1,3 @@
-
 # Tests
 
 ## Running Tests
@@ -16,12 +15,12 @@ npx playwright install chromium
 ```
 
 To run individual tests:
- - Unit tests: `npm run test-unit path/to/file.test.js`
-   - e.g. `npm run test-unit test/unit/ui/handler/scroll_zoom.test.js`
- - Render tests: `npm run test-render tests=render-test-name` where the render test name can be any substring in the `test/integration/render-tests/` subdirectories
-   - e.g. `npm run test-render tests=background-color/default` or `npm run test-render tests=line`
+ - Unit tests: `npm run test-unit -- path/to/file.test.js`
+   - e.g. `npm run test-unit -- test/unit/ui/handler/scroll_zoom.test.js`
+ - Render tests: `npm run test-render -- -t "render-tests/render-test-name"` where the `render-test-name` can be any substring in the `test/integration/render-tests/` subdirectories
+   - e.g. `npm run test-render -- -t "render-tests/background-color/default"` or `npm run test-render -- -t "render-tests/line"`
 
-See [`test/integration/README.md#running-specific-tests`](./integration/README.md#running-specific-tests).
+See [`test/integration/README.md#running-specific-tests`](./integration/README.md#running-specific-tests) and [Vitest documentation](https://vitest.dev/guide/cli.html#testnamepattern).
 
 ## Integration Tests
 
@@ -46,3 +45,25 @@ npm run test-unit -- --no-browser.headless
 The test object is augmented with methods from Sinon.js for [spies](http://sinonjs.org/docs/#spies), [stubs](http://sinonjs.org/docs/#stubs), and [mocks](http://sinonjs.org/docs/#mocks). For example, to use Sinon's spy API, call `t.spy(...)` within a test.
 
 The test framework is set up such that spies, stubs, and mocks on global objects are restored at the end of each test.
+
+## Debugging
+
+If you need to debug vitest browser tests, you can set the `DEBUG` environment variable to enable debug output from vitest.
+
+```sh
+DEBUG=vitest:browser:playwright
+```
+
+When running tests in CI, you can check for the `runner.debug` variable to enable debug output conditionally. For example, in a GitHub Actions workflow, you can use the following snippet for running `test-unit` with debug output:
+
+```yml
+- run: xvfb-run -a npm run test-unit
+  env:
+    DEBUG: ${{ runner.debug && 'vitest:browser:playwright' }}
+```
+
+When debugging browser launches, setting the DEBUG environment variable to `pw:browser` is helpful while debugging `Error: Failed to launch browser` errors.
+
+```sh
+DEBUG=pw:browser
+```

@@ -9,7 +9,7 @@ export default function validateRain(options: ValidationOptions): Array<Validati
     const style = options.style;
     const styleSpec = options.styleSpec;
     const rainSpec = styleSpec.rain;
-    let errors = [];
+    let errors: ValidationError[] = [];
 
     const rootType = getType(rain);
     if (rain === undefined) {

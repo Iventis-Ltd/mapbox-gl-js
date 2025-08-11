@@ -9,6 +9,7 @@ export function isValidUrl(str: string, allowRelativeUrls: boolean): boolean {
     try {
         new URL(str, isRelative && allowRelativeUrls ? 'http://example.com' : undefined);
         return true;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (_: any) {
         return false;
     }
@@ -16,7 +17,7 @@ export function isValidUrl(str: string, allowRelativeUrls: boolean): boolean {
 
 export default function validateModel(options: ValidationOptions): Array<ValidationError> {
     const url = options.value;
-    let errors = [];
+    let errors: ValidationError[] = [];
 
     if (!url) {
         return errors;

@@ -1,61 +1,21 @@
 {
   "version": 8,
    "metadata": {
+    "skipLayerDelete": true,
     "test": {
       "width": 512,
       "height": 512,
       "operations": [
-        ["wait"],
-        ["wait"],
-        ["wait"],
-        [
-          "setFeatureState",
-          {
-            "source": "file-system-tiles",
-            "id": "44106213"
-          },
-          {
-            "hover": true
-          }
-        ],
-        ["wait"],
         ["wait"]
       ],
       "queryGeometry": [
-        32,
-        35
+        290,
+        176
       ]
     }
   },
-  "glyphs": "local://glyphs/{fontstack}/{range}.pbf",
-  "sprite": "local://sprites/sprite",
-  "lights": [
-    {
-      "type": "ambient",
-      "id": "test_ambient",
-      "properties": {
-        "color": "rgba(255, 255, 255, 1)",
-        "intensity": 0.2
-      }
-    },
-    {
-      "type": "directional",
-      "id": "test_directional",
-      "properties": {
-        "color": "rgba(255, 255, 255, 1)",
-        "intensity": 0.2
-      }
-    }
-  ],
   "sources": {
-    "composite": {
-      "type": "vector",
-      "maxzoom": 15,
-      "tiles": [
-        "local://tiles/{z}-{x}-{y}.vector.pbf"
-      ]
-    },
-    "file-system-tiles": {
+    "landmark": {
       "type": "batched-model",
       "maxzoom": 14,
       "tiles": [
@@ -63,74 +23,57 @@
       ]
     }
   },
-  "pitch": 49,
-  "zoom": 16.9,
-  "bearing": -150,
-  "center": [
-    -122.393631,
-    37.794477
-  ],
-  "layers": [
+  "lights": [
     {
-      "minzoom": 0.0,
-      "maxzoom": 22.0,
-      "type": "model",
-      "source": "file-system-tiles",
-      "paint": {
-        "model-color-mix-intensity": 1,
-        "model-emissive-strength": [
-          "match",
-          [
-            "get",
-            "part"
-          ],
-          "door",
-          1.7,
-          "logo",
-          0.0,
-          "window",
-          0.456,
-          0.0
-        ],
-        "model-scale": [
-          1.0,
-          1.0,
-          1.0
-        ],
-        "model-color": "rgba(238, 78, 139, .75)",
-        "model-opacity": 0.5
-      },
-      "id": "landmarks"
+      "type": "ambient",
+      "id": "environment",
+      "properties": {
+        "intensity": 0.2
+      }
     },
     {
-      "minzoom": 14.0,
-      "type": "model",
-      "source": "file-system-tiles",
+      "type": "directional",
+      "id": "sun_light",
+      "properties": {
+        "intensity": 0.8
+      }
+    }
+  ],
+  "pitch": 0,
+  "bearing": -49.18,
+  "zoom": 14,
+  "center": [-79.38215509399942, 43.6510820887318],
+  "layers": [
+    {
+      "id": "bg",
+      "type": "background",
       "paint": {
+        "background-color": "#000"
+      }
+    },
+    {
+      "id": "landmark1",
+      "source": "landmark",
+      "type": "model",
+      "paint": {
+        "model-color": "red",
         "model-color-mix-intensity": 1,
-        "model-emissive-strength": [
-          "match",
-          [
-            "get",
-            "part"
-          ],
-          "door",
-          1.7,
-          "logo",
-          0.0,
-          "window",
-          0.456,
-          0.0
-        ],
-        "model-scale": [
-          1.0,
-          1.0,
-          1.0
-        ],
-        "model-color": "rgb(91, 255, 142)",
-        "model-opacity": 0.5
+        "model-opacity": 1
       },
-      "id": "landmarks2"
+      "minzoom": 0,
+      "maxzoom": 22
+    },
+    {
+      "id": "landmark2",
+      "source": "landmark",
+      "type": "model",
+      "paint": {
+        "model-color": "green",
+        "model-color-mix-intensity": 1,
+        "model-opacity": 1
+      },
+      "minzoom": 14,
+      "maxzoom": 22
     }
   ]
 }

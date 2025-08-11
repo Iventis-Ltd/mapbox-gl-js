@@ -6,7 +6,7 @@ import ColorMode from '../../src/gl/color_mode';
 import DepthMode from '../../src/gl/depth_mode';
 import CullFaceMode from '../../src/gl/cull_face_mode';
 import {mat4, vec3, vec4} from 'gl-matrix';
-import {getMetersPerPixelAtLatitude, mercatorZfromAltitude} from '../../src/geo/mercator_coordinate';
+import {getMetersPerPixelAtLatitude, mercatorZfromAltitude, tileToMeter} from '../../src/geo/mercator_coordinate';
 import TextureSlots from './texture_slots';
 import {convertModelMatrixForGlobe} from '../util/model_util';
 import {clamp, warnOnce} from '../../src/util/util';
@@ -20,8 +20,10 @@ import {Texture3D} from '../../src/render/texture';
 import {pointInFootprint} from '../../3d-style/source/replacement_source';
 import Point from '@mapbox/point-geometry';
 
+import type Program from '../../src/render/program';
 import type Transform from '../../src/geo/transform';
 import type ModelBucket from '../data/bucket/model_bucket';
+import type {UniformValues} from '../../src/render/uniform_binding';
 import type {OverscaledTileID} from '../../src/source/tile_id';
 import type {Tiled3dModelFeature} from '../data/bucket/tiled_3d_model_bucket';
 import type Tiled3dModelBucket from '../data/bucket/tiled_3d_model_bucket';
@@ -34,6 +36,7 @@ import type {DynamicDefinesType} from '../../src/render/program/program_uniforms
 import type VertexBuffer from '../../src/gl/vertex_buffer';
 import type {CutoffParams} from '../../src/render/cutoff';
 import type {LUT} from "../../src/util/lut";
+import type {ModelUniformsType, ModelDepthUniformsType} from '../render/program/model_program';
 
 export default drawModels;
 
@@ -72,7 +75,7 @@ function fogMatrixForModel(modelMatrix: mat4, transform: Transform): mat4 {
     // convert model matrix from the default world size to the one used by the fog
     const fogMatrix = [...modelMatrix] as mat4;
     const scale = transform.cameraWorldSizeForFog / transform.worldSize;
-    const scaleMatrix = mat4.identity([] as any);
+    const scaleMatrix = mat4.identity([] as unknown as mat4);
     mat4.scale(scaleMatrix, scaleMatrix, [scale, scale, 1]);
     mat4.multiply(fogMatrix, scaleMatrix, fogMatrix);
     mat4.multiply(fogMatrix, transform.worldToFogMatrix, fogMatrix);
@@ -179,7 +182,7 @@ function drawMesh(sortedMesh: SortedMesh, painter: Painter, layer: ModelStyleLay
         lightingMatrix = mat4.multiply([] as unknown as mat4, modelParameters.zScaleMatrix, sortedMesh.nodeModelMatrix);
     }
     mat4.multiply(lightingMatrix, modelParameters.negCameraPosMatrix, lightingMatrix);
-    const normalMatrix = mat4.invert([] as any, lightingMatrix);
+    const normalMatrix = mat4.invert([] as unknown as mat4, lightingMatrix);
     mat4.transpose(normalMatrix, normalMatrix);
 
     const ignoreLut = layer.paint.get('model-color-use-theme').constantOr('default') === 'none';
@@ -192,7 +195,7 @@ function drawMesh(sortedMesh: SortedMesh, painter: Painter, layer: ModelStyleLay
         painter,
 
         opacity,
-        pbr.baseColorFactor.toRenderColor(null),
+        pbr.baseColorFactor,
         material.emissiveFactor,
         pbr.metallicFactor,
         pbr.roughnessFactor,
@@ -300,7 +303,7 @@ function prepareMeshes(transform: Transform, node: ModelNode, modelMatrix: mat4,
                 continue;
             }
 
-            const centroidPos = vec3.transformMat4([] as any, mesh.centroid, worldViewProjection);
+            const centroidPos = vec3.transformMat4([] as unknown as vec3, mesh.centroid, worldViewProjection);
             // Filter meshes behind the camera if in perspective mode
             if (!transform.isOrthographic && centroidPos[2] <= 0.0) continue;
             const transparentMesh: SortedMesh = {mesh, depth: centroidPos[2], modelIndex, worldViewProjection, nodeModelMatrix};
@@ -407,7 +410,7 @@ function drawModels(painter: Painter, sourceCache: SourceCache, layer: ModelStyl
     const modelParametersVector: ModelParameters[] = [];
 
     const mercCameraPos = painter.transform.getFreeCameraOptions().position;
-    const cameraPos = vec3.scale([] as any, [mercCameraPos.x, mercCameraPos.y, mercCameraPos.z], painter.transform.worldSize);
+    const cameraPos = vec3.scale([] as unknown as vec3, [mercCameraPos.x, mercCameraPos.y, mercCameraPos.z], painter.transform.worldSize);
     vec3.negate(cameraPos, cameraPos);
     const transparentMeshes: SortedMesh[] = [];
     const opaqueMeshes: SortedMesh[] = [];
@@ -424,10 +427,10 @@ function drawModels(painter: Painter, sourceCache: SourceCache, layer: ModelStyl
         model.computeModelMatrix(painter, rotation, scale, translation, true, true, false);
 
         // compute model parameters matrices
-        const negCameraPosMatrix = mat4.identity([] as any);
+        const negCameraPosMatrix = mat4.identity([] as unknown as mat4);
         const modelMetersPerPixel = getMetersPerPixelAtLatitude(model.position.lat, painter.transform.zoom);
         const modelPixelsPerMeter = 1.0 / modelMetersPerPixel;
-        const zScaleMatrix = mat4.fromScaling([] as any, [1.0, 1.0, modelPixelsPerMeter]);
+        const zScaleMatrix = mat4.fromScaling([] as unknown as mat4, [1.0, 1.0, modelPixelsPerMeter]);
         mat4.translate(negCameraPosMatrix, negCameraPosMatrix, cameraPos);
         const modelParameters = {zScaleMatrix, negCameraPosMatrix};
         modelParametersVector.push(modelParameters);
@@ -615,7 +618,6 @@ function drawVectorLayerModels(painter: Painter, source: SourceCache, layer: Mod
         });
         const modelUris = bucket.getModelUris();
         if (modelUris && !bucket.modelsRequested) {
-            // geojson models are always set in the root scope to avoid model duplication
             modelManager.addModelsFromBucket(modelUris, scope);
             bucket.modelsRequested = true;
         }
@@ -668,6 +670,11 @@ function drawVectorLayerModels(painter: Painter, source: SourceCache, layer: Mod
             }
 
             const model = modelManager.getModel(modelId, scope);
+            if (!model && !modelManager.hasURLBeenRequested(modelId) && !bucket.modelUris.includes(modelId)) {
+                // We are asking for a model that's not yet on this bucket's model list
+                bucket.modelUris.push(modelId);
+                bucket.modelsRequested = false;
+            }
             if (!model || !model.uploaded) continue;
             console.log('VECTOR MODEL FOUND:', {
                 modelId,
@@ -685,6 +692,7 @@ function drawVectorLayerModels(painter: Painter, source: SourceCache, layer: Mod
 
 const minimumInstanceCount = 20;
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function drawInstancedNode(painter: Painter, layer: ModelStyleLayer, node: ModelNode, modelInstances: any, cameraPos: [number, number, number], coord: OverscaledTileID, renderData: RenderData) {
     console.log('DRAW INSTANCED NODE DEBUG:', {
         renderPass: painter.renderPass,
@@ -759,8 +767,8 @@ function drawInstancedNode(painter: Painter, layer: ModelStyleLayer, node: Model
         for (const mesh of node.meshes) {
             const definesValues = ['MODEL_POSITION_ON_GPU'];
             const dynamicBuffers = [];
-            let program;
-            let uniformValues;
+            let program: Program<ModelUniformsType | ModelDepthUniformsType>;
+            let uniformValues: UniformValues<ModelUniformsType | ModelDepthUniformsType>;
             let colorMode;
 
             if (modelInstances.instancedDataArray.length > minimumInstanceCount) {
@@ -793,7 +801,7 @@ function drawInstancedNode(painter: Painter, layer: ModelStyleLayer, node: Model
                     painter,
 
                     layerOpacity,
-                    pbr.baseColorFactor.toRenderColor(null),
+                    pbr.baseColorFactor,
                     material.emissiveFactor,
                     pbr.metallicFactor,
                     pbr.roughnessFactor,
@@ -804,7 +812,7 @@ function drawInstancedNode(painter: Painter, layer: ModelStyleLayer, node: Model
                 );
                 if (shadowRenderer) {
                     if (!renderData.shadowUniformsInitialized) {
-                        shadowRenderer.setupShadows(coord.toUnwrapped(), program, 'model-tile', coord.overscaledZ);
+                        shadowRenderer.setupShadows(coord.toUnwrapped(), program, 'model-tile');
                         renderData.shadowUniformsInitialized = true;
                     } else {
                         program.setShadowUniformValues(context, shadowRenderer.getShadowUniformValues());
@@ -857,10 +865,10 @@ function prepareBatched(painter: Painter, source: SourceCache, layer: ModelStyle
         const tile = source.getTile(coord);
         const bucket = tile.getBucket(layer) as Tiled3dModelBucket | null | undefined;
         if (!bucket) continue;
+        bucket.setFilter(layer.filter);
         // Conflation
         if (painter.conflationActive) bucket.updateReplacement(coord, painter.replacementSource);
-        // evaluate scale
-        bucket.evaluateScale(painter, layer);
+        bucket.evaluateTransform(painter, layer);
         // Compute elevation
         if (painter.terrain && exaggeration > 0) {
             bucket.elevationUpdate(painter.terrain, exaggeration, coord, layer.source);
@@ -883,13 +891,13 @@ function drawBatchedModels(painter: Painter, source: SourceCache, layer: ModelSt
     }
 
     const mercCameraPos = painter.transform.getFreeCameraOptions().position;
-    const cameraPos = vec3.scale([] as any, [mercCameraPos.x, mercCameraPos.y, mercCameraPos.z], painter.transform.worldSize);
-    const negCameraPos = vec3.negate([] as any, cameraPos);
+    const cameraPos = vec3.scale([] as unknown as vec3, [mercCameraPos.x, mercCameraPos.y, mercCameraPos.z], painter.transform.worldSize);
+    const negCameraPos = vec3.negate([] as unknown as vec3, cameraPos);
     // compute model parameters matrices
-    const negCameraPosMatrix = mat4.identity([] as any);
+    const negCameraPosMatrix = mat4.identity([] as unknown as mat4);
     const metersPerPixel = getMetersPerPixelAtLatitude(tr.center.lat, tr.zoom);
     const pixelsPerMeter = 1.0 / metersPerPixel;
-    const zScaleMatrix = mat4.fromScaling([] as any, [1.0, 1.0, pixelsPerMeter]);
+    const zScaleMatrix = mat4.fromScaling([] as unknown as mat4, [1.0, 1.0, pixelsPerMeter]);
     mat4.translate(negCameraPosMatrix, negCameraPosMatrix, negCameraPos);
     const layerOpacity = layer.paint.get('model-opacity').constantOr(1.0);
 
@@ -906,7 +914,7 @@ function drawBatchedModels(painter: Painter, source: SourceCache, layer: ModelSt
     const cutoffParams = getCutoffParams(painter, layer.paint.get('model-cutoff-fade-range'));
 
     const stats = layer.getLayerRenderingStats();
-    const drawTiles = function() {
+    const drawTiles = function () {
         let start, end, step;
         // When front cutoff is enabled the tiles are iterated in back to front order
         if (frontCutoffEnabled) {
@@ -944,6 +952,7 @@ function drawBatchedModels(painter: Painter, source: SourceCache, layer: ModelSt
             }
 
             const sortedNodes: Array<SortedNode> = [];
+            bucket.setFilter(layer.filter);
             for (const nodeInfo of bucket.getNodesInfo()) {
                 if (nodeInfo.hiddenByReplacement) continue;
                 if (!nodeInfo.node.meshes) continue;
@@ -986,13 +995,15 @@ function drawBatchedModels(painter: Painter, source: SourceCache, layer: ModelSt
                 }
 
                 const tileModelMatrix = [...tileMatrix] as mat4;
+                const tileUnitsPerMeter = 1.0 / tileToMeter(coord.canonical);
 
                 const anchorX = node.anchor ? node.anchor[0] : 0;
                 const anchorY = node.anchor ? node.anchor[1] : 0;
 
-                mat4.translate(tileModelMatrix, tileModelMatrix, [anchorX * (scale[0] - 1),
-                    anchorY * (scale[1] - 1),
-                    elevation]);
+                mat4.translate(tileModelMatrix, tileModelMatrix, [
+                    anchorX * (scale[0] - 1) + nodeInfo.evaluatedTranslation[0] * tileUnitsPerMeter,
+                    anchorY * (scale[1] - 1) + nodeInfo.evaluatedTranslation[1] * tileUnitsPerMeter,
+                    elevation + nodeInfo.evaluatedTranslation[2]]);
                 if (!vec3.exactEquals(scale, DefaultModelScale)) {
                     mat4.scale(tileModelMatrix, tileModelMatrix, scale);
                 }
@@ -1002,7 +1013,7 @@ function drawBatchedModels(painter: Painter, source: SourceCache, layer: ModelSt
                 const wvpForNode = mat4.multiply([] as unknown as mat4, tr.expandedFarZProjMatrix, nodeModelMatrix);
                 // Lights come in tilespace so wvp should not include node.matrix when rendering door ligths
                 const wvpForTile = mat4.multiply([] as unknown as mat4, tr.expandedFarZProjMatrix, tileModelMatrix);
-                const anchorPos = vec4.transformMat4([] as any, [anchorX, anchorY, elevation, 1.0], wvpForNode);
+                const anchorPos = vec4.transformMat4([] as unknown as vec4, [anchorX, anchorY, elevation, 1.0], wvpForNode);
                 const depth = anchorPos[2];
 
                 node.hidden = false;
@@ -1010,7 +1021,7 @@ function drawBatchedModels(painter: Painter, source: SourceCache, layer: ModelSt
                 if (!isShadowPass) {
                     if (frontCutoffEnabled) {
                         opacity *= nodeInfo.cameraCollisionOpacity;
-                        opacity *= calculateFrontCutoffOpacity(tileModelMatrix as any, tr, nodeInfo.aabb, frontCutoffParams);
+                        opacity *= calculateFrontCutoffOpacity(tileModelMatrix, tr, nodeInfo.aabb, frontCutoffParams);
                     }
 
                     opacity *= calculateFarCutoffOpacity(cutoffParams, depth);
@@ -1059,7 +1070,7 @@ function drawBatchedModels(painter: Painter, source: SourceCache, layer: ModelSt
 
                 let lightingMatrix = mat4.multiply([] as unknown as mat4, zScaleMatrix, sortedNode.tileModelMatrix);
                 mat4.multiply(lightingMatrix, negCameraPosMatrix, lightingMatrix);
-                const normalMatrix = mat4.invert([] as any, lightingMatrix);
+                const normalMatrix = mat4.invert([] as unknown as mat4, lightingMatrix);
                 mat4.transpose(normalMatrix, normalMatrix);
                 mat4.scale(normalMatrix, normalMatrix, normalScale as [number, number, number]);
 
@@ -1163,7 +1174,7 @@ function drawBatchedModels(painter: Painter, source: SourceCache, layer: ModelSt
                             new Float32Array(node.matrix),
                             painter,
                             sortedNode.opacity,
-                            pbr.baseColorFactor.toRenderColor(null),
+                            pbr.baseColorFactor,
                             material.emissiveFactor,
                             pbr.metallicFactor,
                             pbr.roughnessFactor,

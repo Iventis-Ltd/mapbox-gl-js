@@ -1,3 +1,4 @@
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-nocheck
 import {
     describe,
@@ -18,7 +19,8 @@ function createSource(options, transformCallback) {
     source.onAdd({
         transform: {angle: 0, pitch: 0, showCollisionBoxes: false},
         _getMapId: () => 1,
-        _requestManager: new RequestManager(transformCallback)
+        _requestManager: new RequestManager(transformCallback),
+        getWorldview: () => undefined
     });
 
     source.on('error', (e) => {
@@ -97,7 +99,7 @@ describe('RasterTileSource', () => {
                 const tile = {
                     tileID: new OverscaledTileID(10, 0, 10, 5, 5),
                     state: 'loading',
-                    loadVectorData () {},
+                    loadVectorData() {},
                     setExpiryData() {}
                 };
                 source.loadTile(tile, () => {

@@ -2,12 +2,12 @@
   "version": 8,
   "metadata": {
     "test": {
-      "spriteFormat": "icon_set",
       "width": 128,
       "height": 64,
       "pixelRatio": 2
     }
   },
+  "camera": {"camera-projection": "orthographic"},
   "sources": {
     "geojson": {
       "type": "geojson",

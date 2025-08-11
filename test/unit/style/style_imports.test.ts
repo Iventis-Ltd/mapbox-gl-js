@@ -1,3 +1,4 @@
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-nocheck
 import {describe, test, expect, waitFor, vi} from '../../util/vitest';
 import {mockFetch} from '../../util/network';
@@ -7,11 +8,12 @@ import Transform from '../../../src/geo/transform';
 import StyleLayer from '../../../src/style/style_layer';
 import VectorTileSource from '../../../src/source/vector_tile_source';
 import GlyphManager from '../../../src/render/glyph_manager';
-import {Event, Evented} from '../../../src/util/evented';
-import {RequestManager} from '../../../src/util/mapbox';
+import {Event} from '../../../src/util/evented';
 import {OverscaledTileID} from '../../../src/source/tile_id';
 import {extend} from '../../../src/util/util';
 import {makeFQID} from '../../../src/util/fqid';
+import {ImageId} from '../../../src/style-spec/expression/types/image_id';
+import {StubMap} from './utils';
 
 function createStyleJSON(properties) {
     return extend({
@@ -19,25 +21,6 @@ function createStyleJSON(properties) {
         sources: {},
         layers: []
     }, properties);
-}
-
-class StubMap extends Evented {
-    constructor() {
-        super();
-        this.transform = new Transform();
-        this._requestManager = new RequestManager();
-        this._markers = [];
-        this._triggerCameraUpdate = () => {};
-        this._prioritizeAndUpdateProjection = () => {};
-    }
-
-    setCamera() {}
-
-    _getMapId() {
-        return 1;
-    }
-
-    getWorldview() {}
 }
 
 describe('Style#loadURL', () => {
@@ -1837,6 +1820,7 @@ describe('Terrain', () => {
 
         // Using terrain from the root style
         style.loadJSON(rootWithTerrain);
+        // eslint-disable-next-line no-promise-executor-return
         await new Promise((resolve) => map.on('style.load', resolve));
         expect(style.terrain.scope).toEqual(style.scope);
         expect(style.getTerrain()).toEqual({source: 'mapbox-dem', exaggeration: 2});
@@ -2296,7 +2280,48 @@ describe('Glyphs', () => {
             expect(style.serialize().glyphs).toEqual(undefined);
         });
 
-        style.glyphManager.getGlyphs({'Arial Unicode MS': [55]}, '');
+        style.glyphManager.getGlyphs({'Arial Unicode MS': [55]});
+    });
+
+    test('uses root style glyph url even if fragment provides its own', async () => {
+        const style = new Style(new StubMap());
+
+        style.loadJSON(createStyleJSON({
+            fragment: true,
+            glyphs: 'mapbox://fonts/foo/{fontstack}/{range}.pbf',
+            imports: [{
+                id: 'bar',
+                url: './standard.json',
+                data: createStyleJSON({glyphs: 'mapbox://fonts/bar/{fontstack}/{range}.pbf'})
+            }]
+        }));
+
+        await waitFor(style, "style.load");
+        vi.spyOn(GlyphManager, 'loadGlyphRange').mockImplementation((stack, range, urlTemplate) => {
+            expect(urlTemplate).toEqual('mapbox://fonts/foo/{fontstack}/{range}.pbf');
+        });
+
+        style.glyphManager.getGlyphs({'Arial Unicode MS': [55]});
+    });
+
+    test('uses glyph url from import if there is one and no glyph url in root style', async () => {
+        const style = new Style(new StubMap());
+
+        style.loadJSON(createStyleJSON({
+            fragment: true,
+            imports: [{
+                id: 'bar',
+                url: './standard.json',
+                data: createStyleJSON({glyphs: 'mapbox://fonts/bar/{fontstack}/{range}.pbf'})
+            }]
+        }));
+
+        await waitFor(style, "style.load");
+        vi.spyOn(GlyphManager, 'loadGlyphRange').mockImplementation((stack, range, urlTemplate) => {
+            expect(urlTemplate).toEqual('mapbox://fonts/bar/{fontstack}/{range}.pbf');
+        });
+
+        style.glyphManager.getGlyphs({'Arial Unicode MS': [55]});
     });
 });
 
@@ -2566,8 +2591,7 @@ test('Style#setGeoJSONSourceData', async () => {
     style.loadJSON(initialStyle);
 
     await waitFor(style, 'style.load');
-    expect(() =>
-        style.setGeoJSONSourceData(makeFQID('mapbox', 'streets'), {type: 'FeatureCollection', features: []})).toThrowError(/There is no source with this ID/);
+    expect(() => style.setGeoJSONSourceData(makeFQID('mapbox', 'streets'), {type: 'FeatureCollection', features: []})).toThrowError(/There is no source with this ID/);
 });
 
 describe('Style#setConfigProperty', () => {
@@ -2600,7 +2624,7 @@ describe('Style#setConfigProperty', () => {
 
         expect(style.getConfigProperty('standard', 'showBackground')).toEqual(false);
 
-        style.dispatcher.broadcast = function(key, value) {
+        style.dispatcher.broadcast = function (key, value) {
             expect(key).toEqual('updateLayers');
             expect(value.scope).toEqual('standard');
             expect(value.removedIds).toEqual([]);
@@ -2653,6 +2677,7 @@ describe('Style#setState', () => {
         const initialStyle = createStyleJSON();
         style.loadJSON(initialStyle);
 
+        // eslint-disable-next-line no-promise-executor-return
         await new Promise((resolve) => map.on('style.load', resolve));
 
         const nextStyle = createStyleJSON({
@@ -2660,6 +2685,7 @@ describe('Style#setState', () => {
         });
 
         style.setState(nextStyle);
+        // eslint-disable-next-line no-promise-executor-return
         await new Promise((resolve) => map.on('style.import.load', resolve));
 
         expect(style.serialize()).toEqual(nextStyle);
@@ -2675,6 +2701,7 @@ describe('Style#setState', () => {
         });
 
         style.loadJSON(initialStyle);
+        // eslint-disable-next-line no-promise-executor-return
         await new Promise((resolve) => map.on('style.load', resolve));
 
         const nextStyle = createStyleJSON({
@@ -2682,6 +2709,7 @@ describe('Style#setState', () => {
         });
 
         style.setState(nextStyle);
+        // eslint-disable-next-line no-promise-executor-return
         await new Promise((resolve) => map.on('style.import.load', resolve));
 
         expect(style.serialize()).toEqual(nextStyle);
@@ -2697,6 +2725,7 @@ describe('Style#setState', () => {
         });
 
         style.loadJSON(initialStyle);
+        // eslint-disable-next-line no-promise-executor-return
         await new Promise((resolve) => map.on('style.load', resolve));
 
         const nextStyle = createStyleJSON({
@@ -2704,6 +2733,7 @@ describe('Style#setState', () => {
         });
 
         style.setState(nextStyle);
+        // eslint-disable-next-line no-promise-executor-return
         await new Promise((resolve) => map.on('style.import.load', resolve));
 
         expect(style.serialize()).toEqual(nextStyle);
@@ -2717,6 +2747,7 @@ describe('Style#setState', () => {
         });
 
         style.loadJSON(initialStyle);
+        // eslint-disable-next-line no-promise-executor-return
         await new Promise((resolve) => style.on('style.load', resolve));
 
         const nextStyle = createStyleJSON({
@@ -2738,6 +2769,7 @@ describe('Style#setState', () => {
         })}]});
 
         style.loadJSON(initialStyle);
+        // eslint-disable-next-line no-promise-executor-return
         await new Promise((resolve) => style.on('style.load', resolve));
 
         expect(style.ambientLight).toBeTruthy();
@@ -2773,6 +2805,7 @@ describe('Style#setState', () => {
         const initialStyle = createStyleJSON({imports: [{id: 'a', url: '', data: fragmentStyle}]});
 
         style.loadJSON(initialStyle);
+        // eslint-disable-next-line no-promise-executor-return
         await new Promise((resolve) => style.on('style.load', resolve));
 
         const nextStyle = createStyleJSON({
@@ -2802,6 +2835,7 @@ describe('Style#setState', () => {
         });
 
         style.loadJSON(initialStyle);
+        // eslint-disable-next-line no-promise-executor-return
         await new Promise((resolve) => map.on('style.load', resolve));
 
         const nextStyle = createStyleJSON({
@@ -2809,13 +2843,14 @@ describe('Style#setState', () => {
         });
 
         style.setState(nextStyle);
+        // eslint-disable-next-line no-promise-executor-return
         await new Promise((resolve) => map.on('style.import.load', resolve));
 
         expect(style.serialize()).toEqual(nextStyle);
     });
 
     /**
-     * @not For some reason in browser we not set loaded after style.load event
+     * For some reason in browser we not set loaded after style.load event
      */
     test.skip('Updates fragment URL', async () => {
         const map = new StubMap();
@@ -2873,6 +2908,7 @@ describe('Style#setState', () => {
         });
 
         style.loadJSON(initialStyle);
+        // eslint-disable-next-line no-promise-executor-return
         await new Promise((resolve) => style.on('style.load', resolve));
 
         const nextStyle = createStyleJSON({
@@ -2906,6 +2942,7 @@ describe('Style#setState', () => {
 
         style.loadJSON(initialStyle);
 
+        // eslint-disable-next-line no-promise-executor-return
         await new Promise((resolve) => style.on('style.load', resolve));
 
         expect(style.order).toEqual([
@@ -3020,6 +3057,54 @@ test('Style#areTilesLoaded', async () => {
     });
 });
 
+test('Style#_updateTilesForChangedImages', async () => {
+    const style = new Style(new StubMap());
+
+    const fragment = createStyleJSON({sources: {geojson: {type: 'geojson', data: {type: 'FeatureCollection', features: []}}}});
+    const rootStyle = createStyleJSON({imports: [{id: 'basemap', url: '', data: fragment}]});
+    style.loadJSON(rootStyle);
+
+    await waitFor(style, 'style.load');
+    vi.spyOn(style, '_updateTilesForChangedImages');
+
+    const sourceCache = style.getSourceCache(makeFQID('geojson', 'basemap'));
+    vi.spyOn(sourceCache, 'setDependencies');
+    vi.spyOn(sourceCache, 'reloadTilesForDependencies');
+
+    const imageId = ImageId.from('missing-image');
+    const imageIdStr = imageId.toString();
+    const tileID = new OverscaledTileID(0, 0, 0, 0, 0);
+
+    const tile = new Tile(tileID);
+    sourceCache._tiles[tileID.key] = tile;
+    vi.spyOn(tile, 'setDependencies');
+
+    await new Promise((resolve) => {
+        expect(tile.hasDependency(['icons'], [imageIdStr])).toEqual(false);
+
+        style.getImages(0, {images: [imageId], source: 'geojson', scope: 'basemap', tileID, type: 'icons'}, (err, result) => {
+            expect(err).toBeFalsy();
+            expect(result.size).toEqual(0);
+            resolve();
+        });
+    });
+
+    expect(style._updateTilesForChangedImages).toHaveBeenCalledTimes(1);
+    expect(sourceCache.setDependencies).toHaveBeenCalledTimes(1);
+    expect(sourceCache.setDependencies).toHaveBeenCalledWith(tileID.key, 'icons', [imageIdStr]);
+
+    expect(tile.setDependencies).toHaveBeenCalledTimes(1);
+    expect(tile.setDependencies).toHaveBeenCalledWith('icons', [imageIdStr]);
+    expect(tile.hasDependency(['icons'], [imageIdStr])).toEqual(true);
+
+    style.getFragmentStyle('basemap').addImage(imageId, {});
+    style.update({});
+
+    expect(style._updateTilesForChangedImages).toHaveBeenCalledTimes(2);
+    expect(sourceCache.reloadTilesForDependencies).toHaveBeenCalledTimes(1);
+    expect(sourceCache.reloadTilesForDependencies).toHaveBeenCalledWith(['icons', 'patterns'], [imageIdStr]);
+});
+
 test('Style#getFeaturesetDescriptors', async () => {
     const style = new Style(new StubMap());
     const initialStyle = createStyleJSON({
@@ -3040,4 +3125,47 @@ test('Style#getFeaturesetDescriptors', async () => {
 
     expect(style.getFeaturesetDescriptors()).toEqual([]);
     expect(style.getFeaturesetDescriptors('basemap')).toEqual([{featuresetId: 'poi', importId: 'basemap'}, {featuresetId: 'buildings', importId: 'basemap'}]);
+});
+
+test('Style#getFragmentStyle', async () => {
+    const map = new StubMap();
+    const style = new Style(map);
+
+    // Load a style with imports
+    const initialStyle = createStyleJSON({
+        imports: [{
+            id: 'basemap', url: '', data: createStyleJSON({
+                imports: [{
+                    id: 'basemap', url: '', data: createStyleJSON()
+                }]
+            })
+        }]
+    });
+
+    style.loadJSON(initialStyle);
+    await waitFor(style, 'style.load');
+
+    // Style should return itself when fragmentId is `undefined`
+    expect(style.getFragmentStyle()).toBe(style);
+
+    // Root style should return itself when fragmentId is empty string
+    expect(style.getFragmentStyle('')).toEqual(style);
+
+    // Style should return the fragment with ID 'basemap'
+    const basemapFragment1 = style.getFragmentStyle('basemap');
+    expect(basemapFragment1).not.toEqual(style);
+    expect(basemapFragment1.scope).toEqual('basemap');
+
+    // Fragment should return itself when fragmentId is `undefined`
+    expect(basemapFragment1.getFragmentStyle()).toBe(basemapFragment1);
+
+    // Fragment style should not return the fragment with ID ''
+    expect(basemapFragment1.getFragmentStyle('')).toBeUndefined();
+
+    const basemapFragment2 = basemapFragment1.getFragmentStyle('basemap');
+    expect(basemapFragment2).not.toEqual(basemapFragment1);
+    expect(basemapFragment2.scope).toEqual(makeFQID('basemap', 'basemap'));
+
+    // Fragment should return itself when fragmentId is `undefined`
+    expect(basemapFragment2.getFragmentStyle()).toBe(basemapFragment2);
 });

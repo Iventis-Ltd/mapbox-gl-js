@@ -1,31 +1,33 @@
-import CollisionIndex from './collision_index';
-import EXTENT from '../style-spec/data/extent';
-import ONE_EM from './one_em';
-import * as symbolSize from './symbol_size';
-import * as projection from './projection';
-import {getAnchorJustification, evaluateVariableOffset} from './symbol_layout';
-import {getAnchorAlignment, WritingMode} from './shaping';
-import {mat4} from 'gl-matrix';
-import assert from 'assert';
 import Point from '@mapbox/point-geometry';
-import {getSymbolPlacementTileProjectionMatrix} from '../geo/projection/projection_util';
-import {clamp, warnOnce} from '../util/util';
-import {transformPointToTile, pointInFootprint, skipClipping} from '../../3d-style/source/replacement_source';
+import assert from 'assert';
+import {mat4} from 'gl-matrix';
+import {pointInFootprint, skipClipping, transformPointToTile} from '../../3d-style/source/replacement_source';
 import {LayerTypeMask} from '../../3d-style/util/conflation';
+import {mercatorXfromLng, mercatorYfromLat} from '../geo/mercator_coordinate';
+import {getSymbolPlacementTileProjectionMatrix} from '../geo/projection/projection_util';
+import EXTENT from '../style-spec/data/extent';
+import {clamp, warnOnce} from '../util/util';
+import CollisionIndex from './collision_index';
+import ONE_EM from './one_em';
+import * as projection from './projection';
+import {getAnchorAlignment, WritingMode} from './shaping';
+import {evaluateVariableOffset, getAnchorJustification} from './symbol_layout';
+import {evaluateSizeForFeature, evaluateSizeForZoom} from './symbol_size';
 
-import type BuildingIndex from '../source/building_index';
 import type {ReplacementSource} from "../../3d-style/source/replacement_source";
-import type Transform from '../geo/transform';
-import type StyleLayer from '../style/style_layer';
-import type Tile from '../source/tile';
-import type SymbolBucket from '../data/bucket/symbol_bucket';
-import type {SymbolBuffers, CollisionArrays, SingleCollisionBox} from '../data/bucket/symbol_bucket';
 import type {CollisionBoxArray, CollisionVertexArray, SymbolInstance} from '../data/array_types';
+import type SymbolBucket from '../data/bucket/symbol_bucket';
+import type {CollisionArrays, SingleCollisionBox, SymbolBuffers} from '../data/bucket/symbol_bucket';
 import type FeatureIndex from '../data/feature_index';
+import type Transform from '../geo/transform';
+import type BuildingIndex from '../source/building_index';
+import type Tile from '../source/tile';
 import type {OverscaledTileID} from '../source/tile_id';
-import type {TextAnchor} from './symbol_layout';
 import type {FogState} from '../style/fog_helpers';
+import type {TypedStyleLayer} from '../style/style_layer/typed_style_layer';
 import type {PlacedCollisionBox} from './collision_index';
+import type {Orientation} from './shaping';
+import type {TextAnchor} from './symbol_layout';
 
 // PlacedCollisionBox with all fields optional
 type PartialPlacedCollisionBox = Partial<PlacedCollisionBox>;
@@ -193,7 +195,9 @@ export type VariableOffset = {
 
 type TileLayerParameters = {
     bucket: SymbolBucket;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     layout: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     paint: any;
     posMatrix: mat4;
     textLabelPlaneMatrix: mat4;
@@ -202,8 +206,11 @@ type TileLayerParameters = {
     textPixelRatio: number;
     holdingForFade: boolean;
     collisionBoxArray: CollisionBoxArray | null | undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     partiallyEvaluatedTextSize: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     collisionGroup: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     latestFeatureIndex: any;
 };
 
@@ -223,7 +230,7 @@ export class Placement {
     placements: Partial<Record<CrossTileID, JointPlacement>>;
     opacities: Partial<Record<CrossTileID, JointOpacityState>>;
     variableOffsets: Partial<Record<CrossTileID, VariableOffset>>;
-    placedOrientations: Partial<Record<CrossTileID, number>>;
+    placedOrientations: Partial<Record<CrossTileID, Orientation>>;
     commitTime: number;
     prevZoomAdjustment: number;
     lastPlacementChangeTime: number;
@@ -235,6 +242,7 @@ export class Placement {
     collisionGroups: CollisionGroups;
     prevPlacement: Placement | null | undefined;
     zoomAtLastRecencyCheck: number;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     collisionCircleArrays: Partial<Record<any, CollisionCircleArray>>;
     buildingIndex: BuildingIndex | null | undefined;
 
@@ -261,8 +269,8 @@ export class Placement {
         this.placedOrientations = {};
     }
 
-    getBucketParts(results: Array<BucketPart>, styleLayer: StyleLayer, tile: Tile, sortAcrossTiles: boolean, scaleFactor: number = 1) {
-        const symbolBucket = (tile.getBucket(styleLayer) as SymbolBucket);
+    getBucketParts(results: Array<BucketPart>, styleLayer: TypedStyleLayer, tile: Tile, sortAcrossTiles: boolean, scaleFactor: number = 1) {
+        const symbolBucket = tile.getBucket(styleLayer) as SymbolBucket;
         const bucketFeatureIndex = tile.latestFeatureIndex;
 
         if (!symbolBucket || !bucketFeatureIndex || styleLayer.fqid !== symbolBucket.layerIds[0])
@@ -298,6 +306,7 @@ export class Placement {
                 pixelsToTiles);
 
         let labelToScreenMatrix = null;
+        const invMatrix = symbolBucket.getProjection().createInversionMatrix(this.transform, tile.tileID.canonical);
 
         if (pitchWithMap) {
             const glMatrix = projection.getGlCoordMatrix(
@@ -309,7 +318,7 @@ export class Placement {
                 symbolBucket.getProjection(),
                 pixelsToTiles);
 
-            labelToScreenMatrix = mat4.multiply([] as any, this.transform.labelPlaneMatrix, glMatrix);
+            labelToScreenMatrix = mat4.multiply([] as unknown as mat4, this.transform.labelPlaneMatrix, glMatrix);
         }
 
         let clippingData = null;
@@ -337,12 +346,18 @@ export class Placement {
         const textScaleFactor = clamp(scaleFactor, textSizeScaleRangeMin, textSizeScaleRangeMax);
         const [iconSizeScaleRangeMin, iconSizeScaleRangeMax] = layout.get('icon-size-scale-range');
         const iconScaleFactor = clamp(scaleFactor, iconSizeScaleRangeMin, iconSizeScaleRangeMax);
+        const mercatorCenter: [number, number] = [
+            mercatorXfromLng(this.transform.center.lng),
+            mercatorYfromLat(this.transform.center.lat)
+        ];
 
         const parameters = {
             bucket: symbolBucket,
             layout,
             paint,
             posMatrix,
+            invMatrix,
+            mercatorCenter,
             textLabelPlaneMatrix,
             labelToScreenMatrix,
             clippingData,
@@ -350,8 +365,8 @@ export class Placement {
             textPixelRatio,
             holdingForFade: tile.holdingForFade(),
             collisionBoxArray,
-            partiallyEvaluatedTextSize: symbolSize.evaluateSizeForZoom(symbolBucket.textSizeData, this.transform.zoom, textScaleFactor),
-            partiallyEvaluatedIconSize: symbolSize.evaluateSizeForZoom(symbolBucket.iconSizeData, this.transform.zoom, iconScaleFactor),
+            partiallyEvaluatedTextSize: evaluateSizeForZoom(symbolBucket.textSizeData, this.transform.zoom, textScaleFactor),
+            partiallyEvaluatedIconSize: evaluateSizeForZoom(symbolBucket.iconSizeData, this.transform.zoom, iconScaleFactor),
             collisionGroup: this.collisionGroups.get(symbolBucket.sourceID),
             latestFeatureIndex: tile.latestFeatureIndex
         };
@@ -373,6 +388,9 @@ export class Placement {
     attemptAnchorPlacement(
         anchor: TextAnchor,
         textBox: SingleCollisionBox,
+        mercatorCenter: [number, number],
+        invMatrix: mat4,
+        projectedPosOnLabelSpace: boolean,
         width: number,
         height: number,
         textScale: number,
@@ -385,9 +403,11 @@ export class Placement {
         symbolInstance: SymbolInstance,
         boxIndex: number,
         bucket: SymbolBucket,
-        orientation: number,
+        orientation: Orientation,
         iconBox: SingleCollisionBox | null | undefined,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         textSize: any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         iconSize: any,
     ): {
         shift: Point;
@@ -395,18 +415,17 @@ export class Placement {
     } | null | undefined {
 
         const {textOffset0, textOffset1, crossTileID} = symbolInstance;
-        const textOffset = [textOffset0, textOffset1];
-        // @ts-expect-error - TS2345 - Argument of type 'number[]' is not assignable to parameter of type '[number, number]'.
+        const textOffset: [number, number] = [textOffset0, textOffset1];
         const shift = calculateVariableLayoutShift(anchor, width, height, textOffset, textScale);
 
         const placedGlyphBoxes = this.collisionIndex.placeCollisionBox(
-            bucket, textScale, textBox, offsetShift(shift.x, shift.y, rotateWithMap, pitchWithMap, this.transform.angle),
+            bucket, textScale, textBox, mercatorCenter, invMatrix, projectedPosOnLabelSpace, offsetShift(shift.x, shift.y, rotateWithMap, pitchWithMap, this.transform.angle),
             textAllowOverlap, textPixelRatio, posMatrix, collisionGroup.predicate);
         if (iconBox) {
             const size = bucket.getSymbolInstanceIconSize(iconSize, this.transform.zoom, symbolInstance.placedIconSymbolIndex);
             const placedIconBoxes = this.collisionIndex.placeCollisionBox(
                 bucket, size,
-                iconBox, offsetShift(shift.x, shift.y, rotateWithMap, pitchWithMap, this.transform.angle),
+                iconBox, mercatorCenter, invMatrix, projectedPosOnLabelSpace, offsetShift(shift.x, shift.y, rotateWithMap, pitchWithMap, this.transform.angle),
                 textAllowOverlap, textPixelRatio, posMatrix, collisionGroup.predicate);
             if (placedIconBoxes.box.length === 0) return;
         }
@@ -423,7 +442,6 @@ export class Placement {
             }
             assert(crossTileID !== 0);
             this.variableOffsets[crossTileID] = {
-                // @ts-expect-error - TS2322 - Type 'number[]' is not assignable to type '[number, number]'.
                 textOffset,
                 width,
                 height,
@@ -442,6 +460,7 @@ export class Placement {
         }
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     placeLayerBucketPart(bucketPart: any, seenCrossTileIDs: Set<number>, showCollisionBoxes: boolean, updateCollisionBoxIfNecessary: boolean, scaleFactor: number = 1) {
 
         const {
@@ -453,6 +472,8 @@ export class Placement {
             labelToScreenMatrix,
             clippingData,
             textPixelRatio,
+            mercatorCenter,
+            invMatrix,
             holdingForFade,
             collisionBoxArray,
             partiallyEvaluatedTextSize,
@@ -465,17 +486,27 @@ export class Placement {
         const iconOptional = layout.get('icon-optional');
         const textAllowOverlap = layout.get('text-allow-overlap');
         const iconAllowOverlap = layout.get('icon-allow-overlap');
-        const rotateWithMap = layout.get('text-rotation-alignment') === 'map';
+        const textRotateWithMap = layout.get('text-rotation-alignment') === 'map';
+        const iconRotateWithMap = layout.get('icon-rotation-alignment') === 'map';
         const pitchWithMap = layout.get('text-pitch-alignment') === 'map';
-        const zOffset = layout.get('symbol-z-elevate');
         const symbolZOffset = paint.get('symbol-z-offset');
         const elevationFromSea = layout.get('symbol-elevation-reference') === 'sea';
+        const symbolPlacement = layout.get('symbol-placement');
         const [textSizeScaleRangeMin, textSizeScaleRangeMax] = layout.get('text-size-scale-range');
         const [iconSizeScaleRangeMin, iconSizeScaleRangeMax] = layout.get('icon-size-scale-range');
         const textScaleFactor = clamp(scaleFactor, textSizeScaleRangeMin, textSizeScaleRangeMax);
         const iconScaleFactor = clamp(scaleFactor, iconSizeScaleRangeMin, iconSizeScaleRangeMax);
+        const textVariableAnchor = layout.get('text-variable-anchor');
+
+        const isTextPlacedAlongLine = textRotateWithMap && symbolPlacement !== 'point';
+        const isIconPlacedAlongLine = iconRotateWithMap && symbolPlacement !== 'point';
+        const hasVariableAnchors = textVariableAnchor && bucket.hasTextData();
+        const updateTextFitIcon = bucket.hasIconTextFit() && hasVariableAnchors && bucket.hasIconData();
 
         this.transform.setProjection(bucket.projection);
+
+        const textProjectedPosOnLabelSpace = hasVariableAnchors || isTextPlacedAlongLine;
+        const iconProjectedPosOnLabelSpace = isIconPlacedAlongLine || updateTextFitIcon;
 
         // This logic is similar to the "defaultOpacityState" logic below in updateBucketOpacities
         // If we know a symbol is always supposed to show, force it to be marked visible even if
@@ -583,7 +614,7 @@ export class Placement {
             if (textBox) {
                 updateBoxData(textBox);
                 const updatePreviousOrientationIfNotPlaced = (isPlaced: boolean) => {
-                    let previousOrientation = WritingMode.horizontal;
+                    let previousOrientation: Orientation = WritingMode.horizontal;
                     if (bucket.allowVerticalPlacement && !isPlaced && this.prevPlacement) {
                         const prevPlacedOrientation = this.prevPlacement.placedOrientations[crossTileID];
                         if (prevPlacedOrientation) {
@@ -611,10 +642,10 @@ export class Placement {
                     }
                 };
 
-                if (!layout.get('text-variable-anchor')) {
-                    const placeBox = (collisionTextBox: SingleCollisionBox, orientation: number) => {
+                if (!textVariableAnchor) {
+                    const placeBox = (collisionTextBox: SingleCollisionBox, orientation: Orientation) => {
                         const textScale = bucket.getSymbolInstanceTextSize(partiallyEvaluatedTextSize, symbolInstance, this.transform.zoom, boxIndex, scaleFactor);
-                        const placedFeature = this.collisionIndex.placeCollisionBox(bucket, textScale, collisionTextBox,
+                        const placedFeature = this.collisionIndex.placeCollisionBox(bucket, textScale, collisionTextBox, mercatorCenter, invMatrix, textProjectedPosOnLabelSpace,
                             new Point(0, 0), textAllowOverlap, textPixelRatio, posMatrix, collisionGroup.predicate);
                         if (placedFeature && placedFeature.box && placedFeature.box.length) {
                             this.markUsedOrientation(bucket, orientation, symbolInstance);
@@ -645,7 +676,7 @@ export class Placement {
                     updatePreviousOrientationIfNotPlaced(!!isPlaced);
 
                 } else {
-                    let anchors = layout.get('text-variable-anchor');
+                    let anchors = textVariableAnchor;
 
                     // If this symbol was in the last placement, shift the previously used
                     // anchor to the front of the anchor list, only if the previous anchor
@@ -658,7 +689,7 @@ export class Placement {
                         }
                     }
 
-                    const placeBoxForVariableAnchors = (collisionTextBox: SingleCollisionBox, collisionIconBox: SingleCollisionBox | null | undefined, orientation: number) => {
+                    const placeBoxForVariableAnchors = (collisionTextBox: SingleCollisionBox, collisionIconBox: SingleCollisionBox | null | undefined, orientation: Orientation) => {
                         const textScale = bucket.getSymbolInstanceTextSize(partiallyEvaluatedTextSize, symbolInstance, this.transform.zoom, boxIndex);
                         const width = (collisionTextBox.x2 - collisionTextBox.x1) * textScale + 2.0 * collisionTextBox.padding;
                         const height = (collisionTextBox.y2 - collisionTextBox.y1) * textScale + 2.0 * collisionTextBox.padding;
@@ -672,7 +703,7 @@ export class Placement {
                             const anchor = anchors[i % anchors.length];
                             const allowOverlap = (i >= anchors.length);
                             const result = this.attemptAnchorPlacement(
-                                anchor, collisionTextBox, width, height, textScale, rotateWithMap,
+                                anchor, collisionTextBox, mercatorCenter, invMatrix, textProjectedPosOnLabelSpace, width, height, textScale, textRotateWithMap,
                                 pitchWithMap, textPixelRatio, posMatrix, collisionGroup, allowOverlap,
                                 symbolInstance, boxIndex, bucket, orientation, variableIconBox,
                                 partiallyEvaluatedTextSize, partiallyEvaluatedIconSize);
@@ -738,7 +769,7 @@ export class Placement {
             if (symbolInstance.useRuntimeCollisionCircles) {
                 const placedSymbolIndex = symbolInstance.centerJustifiedTextSymbolIndex >= 0 ? symbolInstance.centerJustifiedTextSymbolIndex : symbolInstance.verticalPlacedTextSymbolIndex;
                 const placedSymbol = bucket.text.placedSymbolArray.get(placedSymbolIndex);
-                const fontSize = symbolSize.evaluateSizeForFeature(bucket.textSizeData, partiallyEvaluatedTextSize, placedSymbol);
+                const fontSize = evaluateSizeForFeature(bucket.textSizeData, partiallyEvaluatedTextSize, placedSymbol);
 
                 const textPixelPadding = layout.get('text-padding');
                 // Convert circle collision height into pixels
@@ -780,10 +811,10 @@ export class Placement {
                 const placeIconFeature = (iconBox: SingleCollisionBox) => {
                     updateBoxData(iconBox);
                     const shiftPoint: Point = symbolInstance.hasIconTextFit && shift ?
-                        offsetShift(shift.x, shift.y, rotateWithMap, pitchWithMap, this.transform.angle) :
+                        offsetShift(shift.x, shift.y, textRotateWithMap, pitchWithMap, this.transform.angle) :
                         new Point(0, 0);
                     const iconScale = bucket.getSymbolInstanceIconSize(partiallyEvaluatedIconSize, this.transform.zoom, symbolInstance.placedIconSymbolIndex);
-                    return this.collisionIndex.placeCollisionBox(bucket, iconScale, iconBox, shiftPoint,
+                    return this.collisionIndex.placeCollisionBox(bucket, iconScale, iconBox, mercatorCenter, invMatrix, iconProjectedPosOnLabelSpace, shiftPoint,
                         iconAllowOverlap, textPixelRatio, posMatrix, collisionGroup.predicate);
                 };
 
@@ -860,11 +891,14 @@ export class Placement {
             seenCrossTileIDs.add(crossTileID);
         };
 
-        if (zOffset && this.buildingIndex) {
-            const tileID = this.retainedQueryData[bucket.bucketInstanceId].tileID;
+        const tileID = this.retainedQueryData[bucket.bucketInstanceId].tileID;
+        if (bucket.elevationType === 'offset' && this.buildingIndex) {
             this.buildingIndex.updateZOffset(bucket, tileID);
-            bucket.updateZOffset();
         }
+        if (bucket.elevationType === 'road') {
+            bucket.updateRoadElevation(tileID.canonical);
+        }
+        bucket.updateZOffset();
 
         if (bucket.sortFeaturesByY) {
             assert(bucketPart.symbolInstanceStart === 0);
@@ -996,18 +1030,20 @@ export class Placement {
         }
     }
 
-    updateLayerOpacities(styleLayer: StyleLayer, tiles: Array<Tile>, layerIndex: number, replacementSource?: ReplacementSource | null) {
+    updateLayerOpacities(styleLayer: TypedStyleLayer, tiles: Array<Tile>, layerIndex: number, replacementSource?: ReplacementSource | null) {
         const seenCrossTileIDs = new Set();
         for (const tile of tiles) {
-            const symbolBucket = (tile.getBucket(styleLayer) as SymbolBucket);
+            const symbolBucket = tile.getBucket(styleLayer) as SymbolBucket;
             if (symbolBucket && tile.latestFeatureIndex && styleLayer.fqid === symbolBucket.layerIds[0]) {
                 // @ts-expect-error - TS2345 - Argument of type 'Set<unknown>' is not assignable to parameter of type 'Set<number>'.
                 this.updateBucketOpacities(symbolBucket, seenCrossTileIDs, tile, tile.collisionBoxArray, layerIndex, replacementSource, tile.tileID, styleLayer.scope);
-                const layout = symbolBucket.layers[0].layout;
-                if (layout.get('symbol-z-elevate') && this.buildingIndex) {
+                if (symbolBucket.elevationType === 'offset' && this.buildingIndex) {
                     this.buildingIndex.updateZOffset(symbolBucket, tile.tileID);
-                    symbolBucket.updateZOffset();
                 }
+                if (symbolBucket.elevationType === 'road') {
+                    symbolBucket.updateRoadElevation(tile.tileID.canonical);
+                }
+                symbolBucket.updateZOffset();
             }
         }
     }

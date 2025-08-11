@@ -45,9 +45,9 @@ export class QueryGeometry {
 
     isAboveHorizon: boolean;
 
-    constructor(screenBounds: Point[], cameraPoint: Point, aboveHorizon: boolean, transform: Transform) {
+    constructor(screenBounds: Point[], aboveHorizon: boolean, transform: Transform) {
         this.screenBounds = screenBounds;
-        this.cameraPoint = cameraPoint;
+        this.cameraPoint = transform.getCameraPoint();
         this._screenRaycastCache = {};
         this._cameraRaycastCache = {};
         this.isAboveHorizon = aboveHorizon;
@@ -69,17 +69,18 @@ export class QueryGeometry {
         let aboveHorizon;
 
         if (geometry instanceof Point || typeof geometry[0] === 'number') {
-            const pt = Point.convert(geometry) as Point;
+            const pt = Point.convert(geometry as PointLike);
             screenGeometry = [pt];
             aboveHorizon = transform.isPointAboveHorizon(pt);
         } else {
             const tl = Point.convert(geometry[0]);
-            const br = Point.convert(geometry[1]) as Point;
+            const br = Point.convert(geometry[1] as PointLike);
+            const center = tl.add(br)._div(2);
             screenGeometry = [tl, br];
-            aboveHorizon = polygonizeBounds(tl, br).every((p) => transform.isPointAboveHorizon(p));
+            aboveHorizon = polygonizeBounds(tl, br).every((p) => transform.isPointAboveHorizon(p)) && transform.isPointAboveHorizon(center);
         }
 
-        return new QueryGeometry(screenGeometry, transform.getCameraPoint(), aboveHorizon, transform);
+        return new QueryGeometry(screenGeometry, aboveHorizon, transform);
     }
 
     /**
@@ -408,7 +409,7 @@ export function unwrapQueryPolygon(polygon: Point[], tr: Transform): {
 // Finding projection of these kind of polygons is more involving as projecting just the corners will
 // produce a degenerate (self-intersecting, non-continuous, etc.) polygon in mercator coordinates
 export function projectPolygonCoveringPoles(polygon: Point[], tr: Transform): CachedPolygon | null | undefined {
-    const matrix = mat4.multiply([] as any, tr.pixelMatrix, tr.globeMatrix);
+    const matrix = mat4.multiply([] as unknown as mat4, tr.pixelMatrix, tr.globeMatrix);
 
     // Transform north and south pole coordinates to the screen to see if they're
     // inside the query polygon

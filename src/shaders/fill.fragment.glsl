@@ -15,6 +15,10 @@ in highp vec4 v_pos_light_view_1;
 in highp float v_depth;
 #endif
 
+#ifdef ELEVATED_ROADS
+in highp float v_road_z_offset;
+#endif
+
 #ifdef INDICATOR_CUTOUT
 in highp float v_z_offset;
 #endif
@@ -44,6 +48,10 @@ void main() {
     if (v_z_offset >= 0.0) {
         out_color = applyCutout(out_color, v_z_offset);
     }
+#endif
+
+#ifdef FEATURE_CUTOUT
+    out_color = apply_feature_cutout(out_color, gl_FragCoord);
 #endif
 
     glFragColor = out_color;

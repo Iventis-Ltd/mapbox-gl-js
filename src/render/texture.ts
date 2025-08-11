@@ -8,6 +8,7 @@ export type TextureFormat = WebGL2RenderingContext['RGBA8' | 'DEPTH_COMPONENT16'
 export type TextureType = WebGL2RenderingContext['UNSIGNED_BYTE' | 'UNSIGNED_SHORT' | 'UNSIGNED_INT_24_8' | 'FLOAT'];
 export type TextureFilter = WebGL2RenderingContext['LINEAR' | 'NEAREST_MIPMAP_NEAREST' | 'LINEAR_MIPMAP_NEAREST' | 'NEAREST_MIPMAP_LINEAR' | 'LINEAR_MIPMAP_LINEAR' | 'NEAREST'];
 export type TextureWrap = WebGL2RenderingContext['REPEAT' | 'CLAMP_TO_EDGE' | 'MIRRORED_REPEAT'];
+export type TextureCompareMode = WebGL2RenderingContext['LESS' | 'LEQUAL' | 'EQUAL' | 'GEQUAL' | 'GREATER' | 'NOTEQUAL' | 'ALWAYS' | 'NEVER'];
 
 function _getLegacyFormat(format: TextureFormat): number {
     switch (format) {
@@ -45,6 +46,7 @@ class Texture {
     magFilter: TextureFilter | null | undefined;
     wrapS: TextureWrap | null | undefined;
     wrapT: TextureWrap | null | undefined;
+    compareMode: TextureCompareMode | null | undefined;
     useMipmap: boolean;
 
     constructor(context: Context, image: TextureImage, format: TextureFormat, options?: {
@@ -58,7 +60,7 @@ class Texture {
         this.update(image, {premultiply: options && options.premultiply});
     }
 
-    update(image: TextureImage, options?: { premultiply?: boolean; position?: {x: number; y: number;} } | null) {
+    update(image: TextureImage, options?: {premultiply?: boolean; position?: {x: number; y: number;}} | null) {
         const srcWidth = (image && image instanceof HTMLVideoElement && image.width === 0) ? image.videoWidth : image.width;
         const srcHeight = (image && image instanceof HTMLVideoElement && image.height === 0) ? image.videoHeight : image.height;
         const {context} = this;
@@ -127,7 +129,7 @@ class Texture {
         }
     }
 
-    bindExtraParam(minFilter: TextureFilter, magFilter: TextureFilter, wrapS: TextureWrap, wrapT: TextureWrap) {
+    bindExtraParam(minFilter: TextureFilter, magFilter: TextureFilter, wrapS: TextureWrap, wrapT: TextureWrap, compareMode?: TextureCompareMode) {
         const {context} = this;
         const {gl} = context;
         gl.bindTexture(gl.TEXTURE_2D, this.texture);
@@ -152,12 +154,22 @@ class Texture {
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrapT);
             this.wrapT = wrapT;
         }
+
+        if (compareMode !== this.compareMode) {
+            if (compareMode) {
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_FUNC, compareMode);
+            } else {
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_MODE, gl.NONE);
+            }
+            this.compareMode = compareMode;
+        }
     }
 
     destroy() {
         const {gl} = this.context;
         gl.deleteTexture(this.texture);
-        this.texture = (null as any);
+        this.texture = null;
     }
 }
 
@@ -217,7 +229,7 @@ export class Texture3D {
     destroy() {
         const {gl} = this.context;
         gl.deleteTexture(this.texture);
-        this.texture = (null as any);
+        this.texture = null;
     }
 }
 

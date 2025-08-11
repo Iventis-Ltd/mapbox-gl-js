@@ -6,8 +6,11 @@ import type {PaintProps} from './hillshade_style_layer_properties';
 import type {LayerSpecification} from '../../style-spec/types';
 import type {CreateProgramParams} from '../../render/painter';
 import type {LUT} from "../../util/lut";
+import type {ProgramName} from '../../render/program';
 
 class HillshadeStyleLayer extends StyleLayer {
+    override type: 'hillshade';
+
     override _transitionablePaint: Transitionable<PaintProps>;
     override _transitioningPaint: Transitioning<PaintProps>;
     override paint: PossiblyEvaluated<PaintProps>;
@@ -28,11 +31,10 @@ class HillshadeStyleLayer extends StyleLayer {
         return this.paint.get('hillshade-exaggeration') !== 0 && this.visibility !== 'none';
     }
 
-    override getProgramIds(): Array<string> {
+    override getProgramIds(): ProgramName[] {
         return ['hillshade', 'hillshadePrepare'];
     }
 
-    // eslint-disable-next-line no-unused-vars
     override getDefaultProgramParams(name: string, zoom: number, lut: LUT | null): CreateProgramParams | null {
         return {
             overrideFog: false

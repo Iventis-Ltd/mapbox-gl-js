@@ -4,6 +4,7 @@ import validate from './validate';
 import {unbundle} from '../util/unbundle_jsonlint';
 
 import type {ValidationOptions} from './validate';
+import type {LightsSpecification} from '../types';
 
 type Options = ValidationOptions & {
     arrayIndex: number;
@@ -11,7 +12,7 @@ type Options = ValidationOptions & {
 
 export default function validateLights(options: Options): Array<ValidationError> {
     const light = options.value;
-    let errors = [];
+    let errors: ValidationError[] = [];
 
     if (!light) {
         return errors;
@@ -39,9 +40,9 @@ export default function validateLights(options: Options): Array<ValidationError>
     if (light.type && lights) {
         for (let i = 0; i < options.arrayIndex; i++) {
             const lightType = unbundle(light.type);
-            const otherLight = lights[i];
+            // const otherLight = lights[i];
+            const otherLight = lights[i] as LightsSpecification & {id: {__line__: number}};
             if (unbundle(otherLight.type) === lightType) {
-                // @ts-expect-error - TS2339 - Property '__line__' does not exist on type 'string'.
                 errors.push(new ValidationError(key, light.id, `duplicate light type "${light.type}", previously defined at line ${otherLight.id.__line__}`));
             }
         }
@@ -64,7 +65,26 @@ export default function validateLights(options: Options): Array<ValidationError>
                 return errors;
             }
             for (const propertyKey in properties) {
-                if (!lightPropertySpec[propertyKey]) {
+                const transitionMatch = propertyKey.match(/^(.*)-transition$/);
+                const useThemeMatch = propertyKey.match(/^(.*)-use-theme$/);
+
+                if (useThemeMatch && lightPropertySpec[useThemeMatch[1]]) {
+                    errors = errors.concat(validate({
+                        key,
+                        value: properties[propertyKey],
+                        valueSpec: {type: 'string'},
+                        style,
+                        styleSpec
+                    }));
+                } else if (transitionMatch && lightPropertySpec[transitionMatch[1]] && lightPropertySpec[transitionMatch[1]].transition) {
+                    errors = errors.concat(validate({
+                        key,
+                        value: light[key],
+                        valueSpec: styleSpec.transition,
+                        style,
+                        styleSpec
+                    }));
+                } else if (!lightPropertySpec[propertyKey]) {
                     errors = errors.concat([new ValidationWarning(options.key, properties[propertyKey], `unknown property "${propertyKey}"`)]);
                 } else {
                     errors = errors.concat(validate({
@@ -77,26 +97,7 @@ export default function validateLights(options: Options): Array<ValidationError>
                 }
             }
         } else {
-            const transitionMatch = key.match(/^(.*)-transition$/);
-            const useThemeMatch = key.match(/^(.*)-use-theme$/);
-
-            if (useThemeMatch && lightSpec[useThemeMatch[1]]) {
-                errors = errors.concat(validate({
-                    key,
-                    value: light[key],
-                    valueSpec: {type:'string'},
-                    style,
-                    styleSpec
-                }));
-            } else if (transitionMatch && lightSpec[transitionMatch[1]] && lightSpec[transitionMatch[1]].transition) {
-                errors = errors.concat(validate({
-                    key,
-                    value: light[key],
-                    valueSpec: styleSpec.transition,
-                    style,
-                    styleSpec
-                }));
-            } else if (lightSpec[key]) {
+            if (lightSpec[key]) {
                 errors = errors.concat(validate({
                     key,
                     value: light[key],

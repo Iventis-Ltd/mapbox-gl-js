@@ -12,6 +12,7 @@ import type {ValidationOptions} from './validate';
 export type PropertyValidationOptions = ValidationOptions & {
     objectKey: string;
     layerType: string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     layer: any;
 };
 
@@ -29,7 +30,7 @@ export default function validateProperty(options: PropertyValidationOptions, pro
     const useThemeMatch = propertyKey.match(/^(.*)-use-theme$/);
     if (propertyType === 'paint' && useThemeMatch && layerSpec[useThemeMatch[1]]) {
         if (isExpression(value)) {
-            const errors = [];
+            const errors: ValidationError[] = [];
             return errors.concat(validate({
                 key: options.key,
                 value,
@@ -46,7 +47,6 @@ export default function validateProperty(options: PropertyValidationOptions, pro
                 },
                 style,
                 styleSpec,
-                // @ts-expect-error - TS2353 - Object literal may only specify known properties, and 'expressionContext' does not exist in type 'ValidationOptions'.
                 expressionContext: 'property',
                 propertyType,
                 propertyKey
@@ -55,7 +55,7 @@ export default function validateProperty(options: PropertyValidationOptions, pro
         return validate({
             key,
             value,
-            valueSpec: {type:'string'},
+            valueSpec: {type: 'string'},
             style,
             styleSpec
         });
@@ -86,7 +86,7 @@ export default function validateProperty(options: PropertyValidationOptions, pro
                 `Use an identity property function instead: ${example}.`)];
     }
 
-    const errors = [];
+    const errors: ValidationError[] = [];
 
     if (options.layerType === 'symbol') {
         if (propertyKey === 'text-field' && style && !style.glyphs && !style.imports) {
@@ -99,6 +99,7 @@ export default function validateProperty(options: PropertyValidationOptions, pro
         if (supportsPropertyExpression(valueSpec) && (supportsLightExpression(valueSpec) || supportsZoomExpression(valueSpec))) {
             // Performance related style spec limitation: zoom and light expressions are not allowed for e.g. trees.
             const expression = createPropertyExpression(deepUnbundle(value), valueSpec);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const expressionObj = (expression.value as any).expression || (expression.value as any)._styleExpression.expression;
 
             if (expressionObj && !isGlobalPropertyConstant(expressionObj, ['measure-light'])) {
@@ -115,7 +116,6 @@ export default function validateProperty(options: PropertyValidationOptions, pro
         valueSpec,
         style,
         styleSpec,
-        // @ts-expect-error - TS2353 - Object literal may only specify known properties, and 'expressionContext' does not exist in type 'ValidationOptions'.
         expressionContext: 'property',
         propertyType,
         propertyKey

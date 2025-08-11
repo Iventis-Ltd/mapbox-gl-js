@@ -8,6 +8,7 @@ import GeolocateControl from './ui/control/geolocate_control';
 import AttributionControl from './ui/control/attribution_control';
 import ScaleControl from './ui/control/scale_control';
 import FullscreenControl from './ui/control/fullscreen_control';
+import IndoorControl from './ui/control/indoor_control';
 import Popup from './ui/popup';
 import Marker from './ui/marker';
 import Style from './style/style';
@@ -50,6 +51,7 @@ export type {LngLatLike, LngLatBoundsLike} from './geo/lng_lat';
 export type {FeatureSelector} from './style/style';
 export type {StyleImageInterface} from './style/style_image';
 export type {CustomLayerInterface} from './style/style_layer/custom_style_layer';
+export type {CustomSourceInterface} from './source/custom_source';
 
 export type {Anchor} from './ui/anchor';
 export type {PopupOptions} from './ui/popup';
@@ -88,6 +90,7 @@ const exported = {
     AttributionControl,
     ScaleControl,
     FullscreenControl,
+    IndoorControl,
     Popup,
     Marker,
     Style,
@@ -346,7 +349,7 @@ console.log("LOCAL MAPBOX GL JS BUILD ACTIVE 2");
  * the function will return `false` if the performance of Mapbox GL JS would
  * be dramatically worse than expected (for example, a software WebGL renderer
  * would be used).
- * @return {boolean}
+ * @returns {boolean}
  * @example
  * // Show an alert if the browser does not support Mapbox GL
  * if (!mapboxgl.supported()) {
@@ -370,14 +373,14 @@ console.log("LOCAL MAPBOX GL JS BUILD ACTIVE 2");
  */
 
 /**
-  * Gets the map's [RTL text plugin](https://www.mapbox.com/mapbox-gl-js/plugins/#mapbox-gl-rtl-text) status.
-  * The status can be `unavailable` (not requested or removed), `loading`, `loaded`, or `error`.
-  * If the status is `loaded` and the plugin is requested again, an error will be thrown.
-  *
-  * @function getRTLTextPluginStatus
-  * @example
-  * const pluginStatus = mapboxgl.getRTLTextPluginStatus();
-  */
+ * Gets the map's [RTL text plugin](https://www.mapbox.com/mapbox-gl-js/plugins/#mapbox-gl-rtl-text) status.
+ * The status can be `unavailable` (not requested or removed), `loading`, `loaded`, or `error`.
+ * If the status is `loaded` and the plugin is requested again, an error will be thrown.
+ *
+ * @function getRTLTextPluginStatus
+ * @example
+ * const pluginStatus = mapboxgl.getRTLTextPluginStatus();
+ */
 
 export default exported;
 

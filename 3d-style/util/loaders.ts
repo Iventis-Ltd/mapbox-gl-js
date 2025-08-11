@@ -6,24 +6,30 @@ import Dispatcher from '../../src/util/dispatcher';
 import {getGlobalWorkerPool as getWorkerPool} from '../../src/util/worker_pool_factory';
 import {Evented} from '../../src/util/evented';
 import {isWorker, warnOnce} from '../../src/util/util';
+import {loadBuildingGen} from './building_gen';
 import assert from 'assert';
 import {DracoDecoderModule} from './draco_decoder_gltf';
 import {MeshoptDecoder} from './meshopt_decoder';
 
+import type {BuildingGen} from './building_gen';
 import type {Class} from '../../src/types/class';
 
-let dispatcher = null;
+let dispatcher: Dispatcher | null = null;
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let dracoLoading: Promise<any> | undefined;
 let dracoUrl: string | null | undefined;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let draco: any;
 let meshoptUrl: string | null | undefined;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let meshopt: any;
+let buildingGenLoading: Promise<unknown> | null = null;
+let buildingGenError: Error = null;
+let buildingGen: BuildingGen | null = null;
 
 export function getDracoUrl(): string {
-// @ts-expect-error - TS2551 - Property 'worker' does not exist on type 'Window & typeof globalThis'. Did you mean 'Worker'? | TS2551 - Property 'worker' does not exist on type 'Window & typeof globalThis'. Did you mean 'Worker'?
-    if (isWorker() && self.worker && self.worker.dracoUrl) {
-        // @ts-expect-error - TS2551 - Property 'worker' does not exist on type 'Window & typeof globalThis'. Did you mean 'Worker'?
+    if (isWorker(self) && self.worker.dracoUrl) {
         return self.worker.dracoUrl;
     }
 
@@ -55,8 +61,9 @@ function waitForDraco() {
 
 export function getMeshoptUrl(): string {
 // @ts-expect-error - TS2551 - Property 'worker' does not exist on type 'Window & typeof globalThis'. Did you mean 'Worker'? | TS2551 - Property 'worker' does not exist on type 'Window & typeof globalThis'. Did you mean 'Worker'?
-    if (isWorker() && self.worker && self.worker.meshoptUrl) {
+    if (isWorker(self) && self.worker.meshoptUrl) {
         // @ts-expect-error - TS2551 - Property 'worker' does not exist on type 'Window & typeof globalThis'. Did you mean 'Worker'?
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         return self.worker.meshoptUrl;
     }
 
@@ -88,6 +95,27 @@ function waitForMeshopt() {
     return decoder.ready.then(() => {
         meshopt = decoder;
     });
+}
+
+export function waitForBuildingGen(): Promise<unknown> {
+    if (buildingGen != null || buildingGenError != null) return null;
+    if (buildingGenLoading != null) return buildingGenLoading;
+
+    const wasmData = fetch(config.BUILDING_GEN_URL);
+    buildingGenLoading = loadBuildingGen(wasmData).then((instance) => {
+        buildingGenLoading = null;
+        buildingGen = instance;
+        return buildingGen;
+    }).catch((error) => {
+        warnOnce('Could not load building-gen');
+        buildingGenLoading = null;
+        buildingGenError = error;
+    });
+    return buildingGenLoading;
+}
+
+export function getBuildingGen(): BuildingGen {
+    return buildingGen;
 }
 
 export const GLTF_BYTE = 5120;
@@ -149,6 +177,7 @@ type GLTFPrimitive = {
     };
 };
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function setAccessorBuffer(buffer: ArrayBuffer, accessor: GLTFAccessor, gltf: any) {
     const bufferViewIndex = gltf.json.bufferViews.length;
     const bufferIndex = gltf.buffers.length;
@@ -164,6 +193,7 @@ function setAccessorBuffer(buffer: ArrayBuffer, accessor: GLTFAccessor, gltf: an
 
 const DRACO_EXT = 'KHR_draco_mesh_compression';
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function loadDracoMesh(primitive: GLTFPrimitive, gltf: any) {
     const config = primitive.extensions && primitive.extensions[DRACO_EXT];
     if (!config) return;
@@ -216,10 +246,11 @@ function loadDracoMesh(primitive: GLTFPrimitive, gltf: any) {
 
 const MESHOPT_EXT = 'EXT_meshopt_compression';
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function loadMeshoptBuffer(bufferView: any, gltf: any) {
 
-    if (!(bufferView.extensions && bufferView.extensions[ MESHOPT_EXT ])) return;
-    const config = bufferView.extensions[ MESHOPT_EXT ];
+    if (!(bufferView.extensions && bufferView.extensions[MESHOPT_EXT])) return;
+    const config = bufferView.extensions[MESHOPT_EXT];
     const byteOffset = config.byteOffset || 0;
     const byteLength = config.byteLength || 0;
 
@@ -247,6 +278,7 @@ function resolveUrl(url: string, baseUrl?: string) {
 function loadBuffer(buffer: {
     uri: string;
     byteLength: number;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 }, gltf: any, index: number, baseUrl?: string) {
     return fetch(resolveUrl(buffer.uri, baseUrl))
         .then(response => response.arrayBuffer())
@@ -256,9 +288,11 @@ function loadBuffer(buffer: {
         });
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getGLTFBytes(gltf: any, bufferViewIndex: number): Uint8Array {
     const bufferView = gltf.json.bufferViews[bufferViewIndex];
     const buffer = gltf.buffers[bufferView.buffer];
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
     return new Uint8Array(buffer, bufferView.byteOffset || 0, bufferView.byteLength);
 }
 
@@ -266,6 +300,7 @@ function loadImage(img: {
     uri?: string;
     bufferView?: number;
     mimeType: string;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 }, gltf: any, index: number, baseUrl?: string) {
     if (img.uri) {
         const uri = resolveUrl(img.uri, baseUrl);
@@ -285,6 +320,7 @@ function loadImage(img: {
     }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function decodeGLTF(arrayBuffer: ArrayBuffer, byteOffset: number = 0, baseUrl?: string): any {
     const gltf = {json: null, images: [], buffers: []};
 
@@ -314,6 +350,7 @@ export function decodeGLTF(arrayBuffer: ArrayBuffer, byteOffset: number = 0, bas
     }
 
     const {buffers, images, meshes, extensionsUsed, bufferViews} = (gltf.json);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let bufferLoadsPromise: Promise<any> = Promise.resolve();
     if (buffers) {
         const bufferLoads = [];
@@ -371,12 +408,15 @@ export function decodeGLTF(arrayBuffer: ArrayBuffer, byteOffset: number = 0, bas
     });
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function loadGLTF(url: string): Promise<any> {
     return fetch(url)
         .then(response => response.arrayBuffer())
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         .then(buffer => decodeGLTF(buffer, 0, url));
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function load3DTile(data: ArrayBuffer): Promise<any> {
     const magic = new Uint32Array(data, 0, 1)[0];
     let gltfOffset = 0;
@@ -388,5 +428,6 @@ export function load3DTile(data: ArrayBuffer): Promise<any> {
             warnOnce('Invalid b3dm header information.');
         }
     }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
     return decodeGLTF(data, gltfOffset);
 }

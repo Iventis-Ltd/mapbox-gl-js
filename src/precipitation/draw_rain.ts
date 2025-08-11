@@ -15,10 +15,10 @@ import {PrecipitationRevealParams} from './precipitation_reveal_params.js';
 import {createTpBindings} from './vignette';
 import {PrecipitationBase, boxWrap, generateUniformDistributedPointsInsideCube, lerpClamp} from './common';
 import {Debug} from '../util/debug';
-import {type VignetteParams} from './vignette';
 
 import type {vec4} from 'gl-matrix';
 import type Painter from '../render/painter';
+import type {VignetteParams} from './vignette';
 
 export class Rain extends PrecipitationBase {
     screenTexture: Texture | null | undefined;
@@ -43,7 +43,7 @@ export class Rain extends PrecipitationBase {
             affectedRatio: number,
             particleOffset: number
         },
-        color: { r: number, g: number, b: number, a: number },
+        color: {r: number, g: number, b: number, a: number},
         direction: {x: number, y: number},
         shapeDirPower: number;
         shapeNormalPower: number;
@@ -281,7 +281,7 @@ export class Rain extends PrecipitationBase {
 
             program.draw(painter, gl.TRIANGLES, DepthMode.disabled, StencilMode.disabled,
                 ColorMode.alphaBlended, CullFaceMode.disabled, uniforms, "rain_particles",
-                this.particlesVx, this.particlesIdx, particlesSegments, {});
+                this.particlesVx, this.particlesIdx, particlesSegments);
         };
 
         // Distortion only

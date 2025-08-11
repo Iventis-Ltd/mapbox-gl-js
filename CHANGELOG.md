@@ -1,3 +1,108 @@
+## 3.14.0
+
+### Breaking changes ⚠️
+- Imported styles will use the `glyphs` URL template from the root style instead of their own.
+
+### Features and improvements ✨
+- Add a `split` expression to divide a string into an array of substrings based on a specified delimiter.
+- Improve memory usage for GeoJSON sources.
+
+### Bug fixes 🐞
+- Fix an issue with querying rendered features during the globe-to-Mercator transition.
+- Fix resources cleanup when removing a map with a terrain or/and vector icons.
+- Fix an issue where a single primary image was not rendered correctly with `icon-image-cross-fade`.
+- Fix an edge case involving the mixing of vertical and horizontal writing modes.
+- Fix rendering of multiple `raster` layers from a single `raster-array` source.
+- Fix restoration of maps with background patterns, heatmap, image, video, or raster sources after WebGL context loss.
+- Fix memory spike when calling `setData` on large datasets.
+
+## 3.13.0
+
+### Breaking changes ⚠️
+- `interpolate` expression will interpolate between non-alpha-premultiplied colors. The change might affect `raster-particle-color`, `line-gradient`, and `heatmap-color`.
+- `rgb` expression will return non-premultiplied-alpha color.
+
+### Features and improvements ✨
+- Add the `["worldview"]` expression, which returns the current `worldview` of the map.
+- Add `model-translation` support for batched model layers.
+- Improve indoor level interaction.
+- Add support of gradient transforms in the fill style of vector icons.
+
+### Bug fixes 🐞
+- Fix querying and styling issues with multiple model layers referencing the same source.
+- Fix `mapbox-gl-rtl-text` v0.3.0 plugin not loading in certain configurations.
+- Fix icons with `text-variable-anchor` disappearing.
+- Fix minor distortions on vector icons in some cases.
+- Fix zooming over terrain with negative altitude values.
+- Fix interactions to not throw on `mouseleave` without `mouseenter`.
+- Fix shadow rendering issues on underground structures.
+- Fix striping artifacts when rendering shadows on some GPU configurations.
+- Fix errors when viewing a style with filtered model layers.
+- Fix parsing of `color-use-theme` property of 3D lights.
+- Fix feature-dependent `config` expressions (h/t [@brncsk](https://github.com/brncsk)) [#13453](https://github.com/mapbox/mapbox-gl-js/pull/13453).
+- Fix reset of the indoor floorplan selection after moving the camera.
+- Fix excessive rerendering of the map after `setStyle` with the same URL of an import.
+- Fix source reloading during mercator-globe transition with terrain.
+- Fix color of semi-transparent vector icons.
+
+### Workflow 🛠️
+
+- Switched from CircleCI to GitHub Actions for continuous integration tests.
+
+## 3.12.0
+
+### Features and improvements ✨
+
+- Add _experimental_ support for rendering 3D road intersections.
+- Add shadow rendering support for elevated lines.
+- Add `wrapTileId` property to `CustomLayerInterface` to control whether tile IDs are wrapped across world copies during rendering.
+- Add `line-pattern-cross-fade`, `fill-pattern-cross-fade`, and `fill-extrusion-pattern-cross-fade` properties for smooth transitions between pattern images.
+- Add support for `extra_bounds` in TileJSON for more fine-grained control over tile requests, particularly when dealing with sparse data coverage.
+- Improve performance by lazy loading 3D models.
+- Slightly improve JS bundle sizes.
+- Various TypeScript types improvements.
+
+### Bug fixes 🐞
+
+- Fixed an issue where calling `setData` on symbol layers could cause flickering.
+- Expose `CustomSourceInterface` TypeScript type that was missing in the public interface.
+- Fix some edge cases related to rendering of elevated structures.
+- Relax `line-gradient` validation to work not only on GeoJSON, but also on vector tile sources if they have `mapbox_clip_start` and `mapbox_clip_end` properties precomputed.
+- Fix `styleimagemissing` event not firing in certain scenarios.
+
+## 3.11.1
+
+- Improve icon loading performance, in particular for landmark icons.
+- Fix `undefined` passed in `Marker` options not falling back to default values.
+
+## 3.11.0
+
+### Breaking changes ⚠️
+- The `at` expression does not interpolate anymore. Please use `at-interpolated` if you want to keep the old behavior.
+
+### Features and improvements ✨
+- Add landmark icons. Landmark icons are stylized, uniquely designed POI icons that indicate the most popular and recognizable landmarks on the map. At the time of this release, we have landmarks for 5 cities: London, Berlin, New York City, San Francisco, and Tokyo.
+- Add `at-interpolated` expression as the interpolated counterpart to the `at` expression.
+- Add `altitude` marker property to adjust elevation. (h/t [@yangtanyu](https://github.com/yangtanyu)) [#13335](https://github.com/mapbox/mapbox-gl-js/pull/13335).
+- Add `getCooperativeGestures` and `setCooperativeGestures` map methods to control cooperative gestures logic after the map is initialized.
+- Add `getGlyphsUrl` and `setGlyphsUrl` map methods to manage the glyphs endpoint URL.
+- Add `pitchRotateKey` map option to override the modifier key for rotate and pitch handlers.
+- Add filtering support for model layers.
+- Add support for vector icons color parameters with alpha values.
+
+### Bug fixes 🐞
+- Hide labels with unreadable angles.
+- Fix rendering of vector image in text on HiDPI screens.
+- Ensure Katakana and CJK symbols render correctly in vertical writing mode.
+- Fix popup position update on map move. (h/t [@ThugRaven](https://github.com/ThugRaven)) [#13412](https://github.com/mapbox/mapbox-gl-js/pull/13412)
+- Fix rendering of self-intersecting elevated lines.
+- Prevent line pattern from turning black at certain zoom levels when shadows are enabled.
+- Fix missing triangles in variable-width lines.
+- Improve Style-Spec validator types.
+- Fix reloading of tiles in style imports.
+- Fix issue where updated images were never cleared after patching them.
+- Fix rendering performance regression related to use-theme.
+
 ## 3.10.0
 
 ### Features and improvements ✨

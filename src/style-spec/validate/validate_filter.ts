@@ -30,7 +30,7 @@ export default function validateFilter(options: Options): Array<ValidationError>
     }
 }
 
-function validateNonExpressionFilter(options: Options) {
+function validateNonExpressionFilter(options: Options): ValidationError[] {
     const value = options.value;
     const key = options.key;
 
@@ -41,7 +41,7 @@ function validateNonExpressionFilter(options: Options) {
     const styleSpec = options.styleSpec;
     let type;
 
-    let errors = [];
+    let errors: ValidationError[] = [];
 
     if (value.length < 1) {
         return [new ValidationError(key, value, 'filter array must have at least 1 element')];
@@ -100,12 +100,12 @@ function validateNonExpressionFilter(options: Options) {
     case 'all':
     case 'none':
         for (let i = 1; i < value.length; i++) {
-            errors = errors.concat(validateNonExpressionFilter(({
+            errors = errors.concat(validateNonExpressionFilter({
                 key: `${key}[${i}]`,
                 value: value[i],
                 style: options.style,
                 styleSpec: options.styleSpec
-            } as any)));
+            }));
         }
         break;
 
@@ -119,5 +119,6 @@ function validateNonExpressionFilter(options: Options) {
         }
         break;
     }
+
     return errors;
 }

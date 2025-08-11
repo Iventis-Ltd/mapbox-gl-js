@@ -20,7 +20,7 @@ import EvaluationContext from '../style-spec/expression/evaluation_context';
 
 import type {OverscaledTileID} from '../source/tile_id';
 import type Point from '@mapbox/point-geometry';
-import type StyleLayer from '../style/style_layer';
+import type {TypedStyleLayer} from '../style/style_layer/typed_style_layer';
 import type {QrfQuery, QrfTarget, QueryResult} from '../source/query_features';
 import type Transform from '../geo/transform';
 import type {PromoteIdSpecification, LayerSpecification} from '../style-spec/types';
@@ -31,13 +31,16 @@ import type {VectorTileLayer, VectorTileFeature} from '@mapbox/vector-tile';
 import type {GridIndex} from '../types/grid-index';
 import type {FeatureState, StyleExpression} from '../style-spec/expression/index';
 import type {FeatureVariant} from '../util/vectortile_to_geojson';
+import type {ImageId} from '../style-spec/expression/types/image_id';
+import type {PossiblyEvaluatedPropertyValue} from '../style/properties';
 
 type QueryParameters = {
     pixelPosMatrix: Float32Array;
     transform: Transform;
     tilespaceGeometry: TilespaceQueryGeometry;
     tileTransform: TileTransform;
-    availableImages: Array<string>;
+    availableImages: ImageId[];
+    worldview: string | undefined;
 };
 
 type FeatureIndices = FeatureIndexStruct | {
@@ -47,7 +50,7 @@ type FeatureIndices = FeatureIndexStruct | {
     layoutVertexArrayOffset: number;
 };
 
-type IntersectionTest = (feature: VectorTileFeature, styleLayer: StyleLayer, featureState: FeatureState, layoutVertexArrayOffset: number) => boolean | number;
+type IntersectionTest = (feature: VectorTileFeature, styleLayer: TypedStyleLayer, featureState: FeatureState, layoutVertexArrayOffset: number) => boolean | number;
 
 class FeatureIndex {
     tileID: OverscaledTileID;
@@ -128,7 +131,7 @@ class FeatureIndex {
 
     // Finds non-symbol features in this tile at a particular position.
     query(query: QrfQuery, params: QueryParameters): QueryResult {
-        const {tilespaceGeometry, transform, tileTransform, pixelPosMatrix, availableImages} = params;
+        const {tilespaceGeometry, transform, tileTransform, pixelPosMatrix, availableImages, worldview} = params;
 
         this.loadVTLayers();
         this.serializedLayersCache.clear();
@@ -160,12 +163,11 @@ class FeatureIndex {
             let featureGeometry = null;
 
             if (this.is3DTile) {
-                this.loadMatchingModelFeature(result, match, query, tilespaceGeometry, transform);
+                this.loadMatchingModelFeature(result, match, query, tilespaceGeometry, transform, worldview);
                 continue;
             }
 
-            const intersectionTest = (feature: VectorTileFeature, styleLayer: StyleLayer, featureState: FeatureState, layoutVertexArrayOffset: number = 0) => {
-                console.log(`FeatureIndex.query intersectionTest ${styleLayer.id}`);
+            const intersectionTest = (feature: VectorTileFeature, styleLayer: TypedStyleLayer, featureState: FeatureState, layoutVertexArrayOffset: number = 0) => {
                 if (!featureGeometry) {
                     featureGeometry = loadGeometry(feature, this.tileID.canonical, tileTransform);
                 }
@@ -178,6 +180,7 @@ class FeatureIndex {
                 match,
                 query,
                 availableImages,
+                worldview,
                 intersectionTest
             );
         }
@@ -189,7 +192,8 @@ class FeatureIndex {
         result: QueryResult,
         featureIndexData: FeatureIndices,
         query: QrfQuery,
-        availableImages: Array<string>,
+        availableImages: ImageId[],
+        worldview: string | undefined,
         intersectionTest?: IntersectionTest
     ): void {
         const {featureIndex, bucketIndex, sourceLayerIndex, layoutVertexArrayOffset} = featureIndexData;
@@ -252,10 +256,10 @@ class FeatureIndex {
                     feature.properties = geojsonFeature.properties;
                     if (filter.needGeometry) {
                         const evaluationFeature = toEvaluationFeature(feature, true);
-                        if (!filter.filter(new EvaluationParameters(this.tileID.overscaledZ), evaluationFeature, this.tileID.canonical)) {
+                        if (!filter.filter(new EvaluationParameters(this.tileID.overscaledZ, {worldview}), evaluationFeature, this.tileID.canonical)) {
                             continue;
                         }
-                    } else if (!filter.filter(new EvaluationParameters(this.tileID.overscaledZ), feature)) {
+                    } else if (!filter.filter(new EvaluationParameters(this.tileID.overscaledZ, {worldview}), feature)) {
                         continue;
                     }
                 }
@@ -281,82 +285,90 @@ class FeatureIndex {
         query: QrfQuery,
         tilespaceGeometry: TilespaceQueryGeometry,
         transform: Transform,
+        worldview: string | undefined,
     ): void {
-        // 3D tile is a single bucket tile.
-        const layerId = this.bucketLayerIDs[0][0];
+        const {featureIndex, bucketIndex} = featureIndexData;
+
+        const layerIDs = this.bucketLayerIDs[bucketIndex];
         const queryLayers = query.layers;
-        if (!queryLayers[layerId]) return;
-
-        const {styleLayer, targets} = queryLayers[layerId];
-        if (styleLayer.type !== 'model') return;
-
-        const tile = tilespaceGeometry.tile;
-        const featureIndex = featureIndexData.featureIndex;
-
-        const bucket = tile.getBucket(styleLayer);
-        if (!bucket || !(bucket instanceof Tiled3dModelBucket)) return;
-
-        const model = loadMatchingModelFeature(bucket, featureIndex, tilespaceGeometry, transform);
-        if (!model) return;
-
-        const {z, x, y} = tile.tileID.canonical;
-        const {feature, intersectionZ, position} = model;
-
-        let featureState: FeatureState = {};
-        if (feature.id !== undefined) {
-            featureState = query.sourceCache.getFeatureState(styleLayer.sourceLayer, feature.id);
+        const queryLayerIDs = Object.keys(queryLayers);
+        if (queryLayerIDs.length && !arraysIntersect(queryLayerIDs, layerIDs)) {
+            return;
         }
 
-        const geojsonFeature = new Feature({} as unknown as VectorTileFeature, z, x, y, feature.id);
-        geojsonFeature.tile = this.tileID.canonical;
-        geojsonFeature.state = featureState;
+        for (let l = 0; l < layerIDs.length; l++) {
+            const layerId = layerIDs[l];
 
-        geojsonFeature.properties = feature.properties;
-        geojsonFeature.geometry = {type: 'Point', coordinates: [position.lng, position.lat]};
+            const {styleLayer, targets} = queryLayers[layerId];
+            if (styleLayer.type !== 'model') continue;
 
-        let serializedLayer = this.serializedLayersCache.get(layerId);
-        if (!serializedLayer) {
-            serializedLayer = styleLayer.serialize();
-            serializedLayer.id = layerId;
-            this.serializedLayersCache.set(layerId, serializedLayer);
-        }
+            const tile = tilespaceGeometry.tile;
 
-        geojsonFeature.source = serializedLayer.source;
-        geojsonFeature.sourceLayer = serializedLayer['source-layer'];
+            const bucket = tile.getBucket(styleLayer);
+            if (!bucket || !(bucket instanceof Tiled3dModelBucket)) continue;
 
-        geojsonFeature.layer = extend({}, serializedLayer);
+            const model = loadMatchingModelFeature(bucket, featureIndex, tilespaceGeometry, transform);
+            if (!model) continue;
 
-        // Iterate over all targets to check if the feature should be included and add feature variants if necessary
-        let shouldInclude = false;
-        for (const target of targets) {
-            this.updateFeatureProperties(geojsonFeature, target);
-            const {filter} = target;
-            if (filter) {
-                feature.properties = geojsonFeature.properties;
-                if (filter.needGeometry) {
-                    if (!filter.filter(new EvaluationParameters(this.tileID.overscaledZ), feature, this.tileID.canonical)) {
+            const {z, x, y} = tile.tileID.canonical;
+            const {feature, intersectionZ, position} = model;
+
+            let featureState: FeatureState = {};
+            if (feature.id !== undefined) {
+                featureState = query.sourceCache.getFeatureState(styleLayer.sourceLayer, feature.id);
+            }
+
+            const geojsonFeature = new Feature({} as unknown as VectorTileFeature, z, x, y, feature.id);
+            geojsonFeature.tile = this.tileID.canonical;
+            geojsonFeature.state = featureState;
+
+            geojsonFeature.properties = feature.properties;
+            geojsonFeature.geometry = {type: 'Point', coordinates: [position.lng, position.lat]};
+
+            let serializedLayer = this.serializedLayersCache.get(layerId);
+            if (!serializedLayer) {
+                serializedLayer = styleLayer.serialize();
+                serializedLayer.id = layerId;
+                this.serializedLayersCache.set(layerId, serializedLayer);
+            }
+
+            geojsonFeature.source = serializedLayer.source;
+            geojsonFeature.sourceLayer = serializedLayer['source-layer'];
+
+            geojsonFeature.layer = extend({}, serializedLayer);
+
+            // Iterate over all targets to check if the feature should be included and add feature variants if necessary
+            let shouldInclude = false;
+            for (const target of targets) {
+                this.updateFeatureProperties(geojsonFeature, target);
+                const {filter} = target;
+                if (filter) {
+                    feature.properties = geojsonFeature.properties;
+                    if (filter.needGeometry) {
+                        if (!filter.filter(new EvaluationParameters(this.tileID.overscaledZ, {worldview}), feature, this.tileID.canonical)) {
+                            continue;
+                        }
+                    } else if (!filter.filter(new EvaluationParameters(this.tileID.overscaledZ, {worldview}), feature)) {
                         continue;
                     }
-                } else if (!filter.filter(new EvaluationParameters(this.tileID.overscaledZ), feature)) {
-                    continue;
+                }
+
+                // Feature passes at least one target filter
+                shouldInclude = true;
+
+                // If the target has associated interaction id, add a feature variant for it
+                if (target.targetId) {
+                    this.addFeatureVariant(geojsonFeature, target);
                 }
             }
 
-            // Feature passes at least one target filter
-            shouldInclude = true;
-
-            // If the target has associated interaction id, add a feature variant for it
-            if (target.targetId) {
-                this.addFeatureVariant(geojsonFeature, target);
+            if (shouldInclude) {
+                this.appendToResult(result, layerId, featureIndex, geojsonFeature, intersectionZ);
             }
-        }
-
-        if (shouldInclude) {
-            this.appendToResult(result, layerId, featureIndex, geojsonFeature, intersectionZ);
         }
     }
 
-    updateFeatureProperties(feature: Feature, target: QrfTarget, availableImages?: Array<string>) {
+    updateFeatureProperties(feature: Feature, target: QrfTarget, availableImages?: ImageId[]) {
         if (target.properties) {
             const transformedProperties = {};
             for (const name in target.properties) {
@@ -381,7 +393,7 @@ class FeatureIndex {
      * @param {QrfTarget} target The target to derive the feature for.
      * @returns {Feature} The derived feature.
      */
-    addFeatureVariant(feature: Feature, target: QrfTarget, availableImages?: Array<string>) {
+    addFeatureVariant(feature: Feature, target: QrfTarget, availableImages?: ImageId[]) {
         const variant: FeatureVariant = {
             target: target.target,
             namespace: target.namespace,
@@ -413,14 +425,15 @@ class FeatureIndex {
         bucketIndex: number,
         sourceLayerIndex: number,
         query: QrfQuery,
-        availableImages: Array<string>,
+        availableImages: ImageId[],
+        worldview: string | undefined
     ): QueryResult {
         const result: QueryResult = {};
         this.loadVTLayers();
 
         for (const symbolFeatureIndex of symbolFeatureIndexes) {
             const featureIndexData = {bucketIndex, sourceLayerIndex, featureIndex: symbolFeatureIndex, layoutVertexArrayOffset: 0};
-            this.loadMatchingFeature(result, featureIndexData, query, availableImages);
+            this.loadMatchingFeature(result, featureIndexData, query, availableImages, worldview);
         }
 
         return result;
@@ -453,8 +466,8 @@ class FeatureIndex {
         return false;
     }
 
-    getId(feature: VectorTileFeature, sourceLayerId: string): string | number {
-        let id: string | number = feature.id;
+    getId(feature: VectorTileFeature, sourceLayerId: string): string | number | undefined {
+        let id: string | number | undefined = feature.id;
         if (this.promoteId) {
             const propName = !Array.isArray(this.promoteId) && typeof this.promoteId === 'object' ? this.promoteId[sourceLayerId] : this.promoteId;
             if (propName != null) {
@@ -489,11 +502,13 @@ register(FeatureIndex, 'FeatureIndex', {omit: ['rawTileData', 'sourceLayerCoder'
 
 export default FeatureIndex;
 
-function evaluateProperties(serializedProperties: unknown, styleLayerProperties: unknown, feature: VectorTileFeature, featureState: FeatureState, availableImages: Array<string>) {
-    return mapObject(serializedProperties, (property, key) => {
-        const prop = styleLayerProperties instanceof PossiblyEvaluated ? styleLayerProperties.get(key) : null;
-        // @ts-expect-error - TS2339 - Property 'evaluate' does not exist on type 'unknown'. | TS2339 - Property 'evaluate' does not exist on type 'unknown'.
-        return prop && prop.evaluate ? prop.evaluate(feature, featureState, availableImages) : prop;
+function evaluateProperties(serializedProperties: Record<PropertyKey, unknown>, styleLayerProperties: unknown, feature: VectorTileFeature, featureState: FeatureState, availableImages: ImageId[]) {
+    return mapObject(serializedProperties, (_, key) => {
+        const prop = styleLayerProperties instanceof PossiblyEvaluated ?
+            styleLayerProperties.get(key) as PossiblyEvaluatedPropertyValue<unknown> :
+            null;
+
+        return prop && prop.evaluate ? prop.evaluate(feature, featureState, undefined, availableImages) : prop;
     });
 }
 

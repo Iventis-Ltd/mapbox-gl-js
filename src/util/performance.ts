@@ -10,8 +10,8 @@ export const PerformanceMarkers = {
 } as const;
 
 export type PerformanceMarker =
-    typeof PerformanceMarkers[keyof typeof PerformanceMarkers] |
-    typeof LivePerformanceMarkers[keyof typeof LivePerformanceMarkers];
+    | typeof PerformanceMarkers[keyof typeof PerformanceMarkers]
+    | typeof LivePerformanceMarkers[keyof typeof LivePerformanceMarkers];
 
 export type PerformanceMetrics = {
     loadTime: number;
@@ -26,7 +26,7 @@ export type PerformanceMetrics = {
     workerIdle: number;
     workerIdlePercent: number;
     placementTime: number;
-    timelines: Array<any>;
+    timelines: WorkerPerformanceMetrics[];
 };
 
 export type WorkerPerformanceMetrics = {
@@ -123,13 +123,13 @@ export const PerformanceUtils = {
 
     getWorkerPerformanceMetrics(): WorkerPerformanceMetrics {
         const entries = performance.getEntries().map((entry: PerformanceEntry & PerformanceMarkOptions) => {
-            const result = entry.toJSON();
+            const result: PerformanceEntry & PerformanceMarkOptions = entry.toJSON();
             if (entry.detail) Object.assign(result, {detail: entry.detail});
             return result;
         });
 
         return {
-            scope: isWorker() ? 'Worker' : 'Window',
+            scope: isWorker(self) ? 'Worker' : 'Window',
             timeOrigin: performance.timeOrigin,
             entries
         };

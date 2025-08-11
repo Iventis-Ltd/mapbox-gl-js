@@ -4,6 +4,8 @@ import {mergeConfig, defineConfig} from 'vitest/config';
 import {globSync} from 'glob';
 import baseConfig from './vitest.config.base';
 
+const isCI = process.env.CI === 'true';
+
 function styleSpecFixtures() {
     const virtualModuleId = 'virtual:style-spec/fixtures';
     const resolvedVirtualModuleId = `\0${virtualModuleId}`;
@@ -29,13 +31,18 @@ function styleSpecFixtures() {
 
 export default mergeConfig(baseConfig, defineConfig({
     test: {
+        browser: {
+            instances: [
+                {browser: 'chromium', launch: {channel: 'chrome'}},
+            ],
+        },
         include: ['test/unit/**/*.test.ts'],
         setupFiles: ['test/unit/setup.ts'],
-        reporters: process.env.CI ? [
+        reporters: isCI ? [
             ['html', {outputFile: './test/unit/vitest/index.html'}],
-            ['junit', {outputFile: './test/unit/test-results.xml'}],
-            ['basic']
-        ] : ['basic'],
+            ['verbose', {summary: false}],
+            ['github-actions']
+        ] : [['default']],
     },
     plugins: [
         styleSpecFixtures()

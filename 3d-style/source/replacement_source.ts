@@ -9,6 +9,7 @@ import type {Footprint, TileFootprint} from '../util/conflation';
 import type SourceCache from '../../src/source/source_cache';
 
 export const ReplacementOrderLandmark = Number.MAX_SAFE_INTEGER;
+export const ReplacementOrderBuilding = ReplacementOrderLandmark - 1;
 
 // Abstract interface that acts as a source for footprints used in the replacement process
 interface FootprintSource {
@@ -132,7 +133,7 @@ class ReplacementSource {
 
                     for (const id of source.cache.getVisibleCoordinates()) {
                         const tile = source.cache.getTile(id);
-                        const bucket: Bucket | null | undefined = (tile.buckets[source.layer] as any);
+                        const bucket: Bucket | null | undefined = tile.buckets[source.layer];
                         if (bucket) {
                             bucket.updateFootprints(id.toUnwrapped(), footprints);
                         }

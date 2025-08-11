@@ -6,7 +6,7 @@ import {getLayoutProperties, getPaintProperties} from './fill_extrusion_style_la
 import Point from '@mapbox/point-geometry';
 import {vec3, vec4} from 'gl-matrix';
 import EXTENT from '../../style-spec/data/extent';
-import {Point3D} from '../../util/polygon_clipping';
+import {Point3D} from '../../util/line_clipping';
 
 import type {Transitionable, Transitioning, PossiblyEvaluated, ConfigOptions} from '../properties';
 import type {CanonicalTileID} from '../../source/tile_id';
@@ -20,8 +20,11 @@ import type {DEMSampler} from '../../terrain/elevation';
 import type {vec2} from 'gl-matrix';
 import type {VectorTileFeature} from '@mapbox/vector-tile';
 import type {LUT} from "../../../src/util/lut";
+import type {ProgramName} from '../../../src/render/program';
 
 class FillExtrusionStyleLayer extends StyleLayer {
+    override type: 'fill-extrusion';
+
     override _transitionablePaint: Transitionable<PaintProps>;
     override _transitioningPaint: Transitioning<PaintProps>;
     override paint: PossiblyEvaluated<PaintProps>;
@@ -33,7 +36,7 @@ class FillExtrusionStyleLayer extends StyleLayer {
             paint: getPaintProperties()
         };
         super(layer, properties, scope, lut, options);
-        this._stats = {numRenderedVerticesInShadowPass : 0, numRenderedVerticesInTransparentPass: 0};
+        this._stats = {numRenderedVerticesInShadowPass: 0, numRenderedVerticesInTransparentPass: 0};
     }
 
     createBucket(parameters: BucketParameters<FillExtrusionStyleLayer>): FillExtrusionBucket {
@@ -44,7 +47,7 @@ class FillExtrusionStyleLayer extends StyleLayer {
         return translateDistance(this.paint.get('fill-extrusion-translate'));
     }
 
-    override is3D(): boolean {
+    override is3D(terrainEnabled?: boolean): boolean {
         return true;
     }
 
@@ -60,9 +63,10 @@ class FillExtrusionStyleLayer extends StyleLayer {
         return true;
     }
 
-    override getProgramIds(): string[] {
+    override getProgramIds(): ProgramName[] {
         const patternProperty = this.paint.get('fill-extrusion-pattern');
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const image = patternProperty.constantOr((1 as any));
         return [image ? 'fillExtrusionPattern' : 'fillExtrusion'];
     }

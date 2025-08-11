@@ -10,7 +10,7 @@ export default function validateLight(options: ValidationOptions): Array<Validat
     const lightSpec = styleSpec.light;
     const style = options.style;
 
-    let errors = [];
+    let errors: ValidationError[] = [];
 
     const rootType = getType(light);
     if (light === undefined) {
@@ -28,7 +28,7 @@ export default function validateLight(options: ValidationOptions): Array<Validat
             errors = errors.concat(validate({
                 key,
                 value: light[key],
-                valueSpec: {type:'string'},
+                valueSpec: {type: 'string'},
                 style,
                 styleSpec
             }));

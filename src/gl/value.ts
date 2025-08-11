@@ -1,4 +1,4 @@
-import Color from '../style-spec/util/color';
+import Color, {type NonPremultipliedRenderColor} from '../style-spec/util/color';
 import assert from 'assert';
 
 import type Context from './context';
@@ -43,7 +43,7 @@ class BaseValue<T> implements Value<T> {
         return this.current;
     }
 
-    set(value: T) { // eslint-disable-line
+    set(value: T) {
         // overridden in child classes;
     }
 
@@ -56,12 +56,12 @@ class BaseValue<T> implements Value<T> {
     }
 }
 
-export class ClearColor extends BaseValue<Color> {
-    override getDefault(): Color {
-        return Color.transparent;
+export class ClearColor extends BaseValue<NonPremultipliedRenderColor> {
+    override getDefault(): NonPremultipliedRenderColor {
+        return Color.transparent.toNonPremultipliedRenderColor(null);
     }
 
-    override set(v: Color) {
+    override set(v: NonPremultipliedRenderColor) {
         const c = this.current;
         if (v.r === c.r && v.g === c.g && v.b === c.b && v.a === c.a && !this.dirty) return;
         this.gl.clearColor(v.r, v.g, v.b, v.a);
@@ -268,12 +268,12 @@ export class BlendFunc extends BaseValue<BlendFuncType> {
     }
 }
 
-export class BlendColor extends BaseValue<Color> {
-    override getDefault(): Color {
-        return Color.transparent;
+export class BlendColor extends BaseValue<NonPremultipliedRenderColor> {
+    override getDefault(): NonPremultipliedRenderColor {
+        return Color.transparent.toNonPremultipliedRenderColor(null);
     }
 
-    override set(v: Color) {
+    override set(v: NonPremultipliedRenderColor) {
         const c = this.current;
         if (v.r === c.r && v.g === c.g && v.b === c.b && v.a === c.a && !this.dirty) return;
         this.gl.blendColor(v.r, v.g, v.b, v.a);
@@ -450,11 +450,14 @@ export class BindElementBuffer extends BaseValue<WebGLBuffer | null | undefined>
     }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export class BindVertexArrayOES extends BaseValue<any> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     override getDefault(): any {
         return null;
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     override set(v: any) {
         if (!this.gl || (v === this.current && !this.dirty)) return;
         this.gl.bindVertexArray(v);
@@ -485,7 +488,7 @@ export class PixelStoreUnpackPremultiplyAlpha extends BaseValue<boolean> {
     override set(v: boolean): void {
         if (v === this.current && !this.dirty) return;
         const gl = this.gl;
-        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, (v as any));
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, v);
         this.current = v;
         this.dirty = false;
     }
@@ -499,7 +502,7 @@ export class PixelStoreUnpackFlipY extends BaseValue<boolean> {
     override set(v: boolean): void {
         if (v === this.current && !this.dirty) return;
         const gl = this.gl;
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, (v as any));
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, v);
         this.current = v;
         this.dirty = false;
     }

@@ -69,13 +69,21 @@ class Context {
     renderer: string | null | undefined;
     vendor: string | null | undefined;
 
-    extTextureFilterAnisotropic: any;
-    extTextureFilterAnisotropicMax: any;
-    extTextureHalfFloat: any;
-    extRenderToTextureHalfFloat: any;
-    extDebugRendererInfo: any;
-    extTimerQuery: any;
-    extTextureFloatLinear: any;
+    // eslint-disable-next-line camelcase
+    extTextureFilterAnisotropic: EXT_texture_filter_anisotropic;
+    extTextureFilterAnisotropicMax: GLfloat;
+    // eslint-disable-next-line camelcase
+    extRenderToTextureHalfFloat: EXT_color_buffer_half_float;
+    // eslint-disable-next-line camelcase
+    extDebugRendererInfo: WEBGL_debug_renderer_info;
+    extTimerQuery: {
+        /* EXT_disjoint_timer_query is not yet available as a TypeScript type */
+        TIME_ELAPSED_EXT: number;
+        getQueryParameter: (query: WebGLQuery, pname: GLenum) => GLuint;
+        deleteQueryEXT: (query: WebGLQuery) => void;
+    };
+    // eslint-disable-next-line camelcase
+    extTextureFloatLinear: OES_texture_float_linear;
     options: ContextOptions;
     maxPointSize: number;
 
@@ -260,7 +268,7 @@ class Context {
 
         if (color) {
             mask |= gl.COLOR_BUFFER_BIT;
-            this.clearColor.set(color);
+            this.clearColor.set(color.toNonPremultipliedRenderColor(null));
             if (colorMask) {
                 this.colorMask.set(colorMask);
             } else {

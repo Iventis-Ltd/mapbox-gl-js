@@ -30,8 +30,8 @@ import {vec3, mat4} from 'gl-matrix';
 import type RasterParticleState from '../render/raster_particle_state';
 import type FeatureIndex from '../data/feature_index';
 import type {Bucket} from '../data/bucket';
-import type StyleLayer from '../style/style_layer';
-import type {WorkerTileResult} from './worker_source';
+import type {TypedStyleLayer} from '../style/style_layer/typed_style_layer';
+import type {WorkerSourceVectorTileResult} from './worker_source';
 import type Actor from '../util/actor';
 import type DEMData from '../data/dem_data';
 import type {AlphaImage, SpritePositions} from '../util/image';
@@ -54,16 +54,22 @@ import type Painter from '../render/painter';
 import type {QrfQuery, QueryResult} from '../source/query_features';
 import type {UserManagedTexture, TextureImage} from '../render/texture';
 import type {VectorTileLayer} from '@mapbox/vector-tile';
+import type {ImageId, StringifiedImageId} from '../style-spec/expression/types/image_id';
 
 const CLOCK_SKEW_RETRY_TIMEOUT = 30000;
-export type TileState = // Tile data is in the process of loading.
-'loading' | // Tile data has been loaded. Tile can be rendered.
-'loaded' | // Tile data has been loaded but has no content for rendering.
-'empty' | // Tile data has been loaded and is being updated. Tile can be rendered.
-'reloading' | // Tile data has been deleted.
-'unloaded' | // Tile data was not loaded because of an error.
-'errored' | 'expired';/* Tile data was previously loaded, but has expired per its
- * HTTP headers and is in the process of refreshing. */
+export type TileState =
+    | 'loading'   // Tile data is in the process of loading.
+    | 'loaded'    // Tile data has been loaded. Tile can be rendered.
+    | 'empty'     // Tile data has been loaded but has no content for rendering.
+    | 'reloading' // Tile data has been loaded and is being updated. Tile can be rendered.
+    | 'unloaded'  // Tile data has been deleted.
+    | 'errored'   // Tile data was not loaded because of an error.
+    | 'expired';  // Tile data was previously loaded, but has expired per its HTTP headers and is in the process of refreshing.
+
+export type ExpiryData = {
+    cacheControl?: string;
+    expires?: string;
+};
 
 // a tile bounds outline used for getting reprojected tile geometry in non-mercator projections
 const BOUNDS_FEATURE = (() => {
@@ -86,7 +92,7 @@ const BOUNDS_FEATURE = (() => {
  * Returns a matrix that can be used to convert from tile coordinates to viewport pixel coordinates.
  */
 function getPixelPosMatrix(transform: Transform, tileID: OverscaledTileID) {
-    const t = mat4.fromScaling([] as any, [transform.width * 0.5, -transform.height * 0.5, 1]);
+    const t = mat4.fromScaling([] as unknown as mat4, [transform.width * 0.5, -transform.height * 0.5, 1]);
     mat4.translate(t, t, [1, -1, 0]);
     mat4.multiply(t, t, transform.calculateProjMatrix(tileID.toUnwrapped()));
     return Float32Array.from(t);
@@ -115,14 +121,18 @@ class Tile {
     lineAtlasTexture: Texture | null | undefined;
     glyphAtlasImage: AlphaImage | null | undefined;
     glyphAtlasTexture: Texture | null | undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expirationTime: any;
     expiredRequestCount: number;
     state: TileState;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     timeAdded: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     fadeEndTime: any;
     collisionBoxArray: CollisionBoxArray | null | undefined;
     redoWhenDone: boolean;
     showCollisionBoxes: boolean;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     placementSource: any;
     actor: Actor | null | undefined;
     vtLayers: {
@@ -145,6 +155,7 @@ class Tile {
     hillshadeFBO: Framebuffer | null | undefined;
     demTexture: Texture | null | undefined;
     refreshedUponExpiration: boolean;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     reloadCallback: any;
     resourceTiming: Array<PerformanceResourceTiming> | null | undefined;
     queryPadding: number;
@@ -153,7 +164,7 @@ class Tile {
     symbolFadeHoldUntil: number | null | undefined;
     hasSymbolBuckets: boolean;
     hasRTLText: boolean;
-    dependencies: any;
+    dependencies: Record<string, Record<StringifiedImageId, boolean>>;
     projection: Projection;
 
     queryGeometryDebugViz: TileSpaceDebugBuffer | null | undefined;
@@ -172,12 +183,14 @@ class Tile {
     _globeTileDebugTextBuffer: VertexBuffer | null | undefined;
     _lastUpdatedBrightness: number | null | undefined;
 
+    worldview: string | undefined;
+
     /**
      * @param {OverscaledTileID} tileID
      * @param size
      * @private
      */
-    constructor(tileID: OverscaledTileID, size: number, tileZoom: number, painter?: Painter | null, isRaster?: boolean) {
+    constructor(tileID: OverscaledTileID, size: number, tileZoom: number, painter?: Painter | null, isRaster?: boolean, worldview?: string) {
         this.tileID = tileID;
         this.uid = uniqueId();
         this.uses = 0;
@@ -205,6 +218,8 @@ class Tile {
         if (painter && painter.transform) {
             this.projection = painter.transform.projection;
         }
+
+        this.worldview = worldview;
     }
 
     registerFadeDuration(duration: number) {
@@ -236,7 +251,7 @@ class Tile {
      * @returns {undefined}
      * @private
      */
-    loadVectorData(data: WorkerTileResult | null | undefined, painter: Painter, justReloaded?: boolean | null) {
+    loadVectorData(data: WorkerSourceVectorTileResult | null | undefined, painter: Painter, justReloaded?: boolean | null) {
         this.unloadVectorData();
 
         this.state = 'loaded';
@@ -393,7 +408,7 @@ class Tile {
         this.state = 'unloaded';
     }
 
-    loadModelData(data: WorkerTileResult | null | undefined, painter: Painter, justReloaded?: boolean | null) {
+    loadModelData(data: WorkerSourceVectorTileResult | null | undefined, painter: Painter, justReloaded?: boolean | null) {
         if (!data) {
             return;
         }
@@ -407,7 +422,7 @@ class Tile {
         }
     }
 
-    getBucket(layer: StyleLayer): Bucket {
+    getBucket(layer: TypedStyleLayer): Bucket {
         return this.buckets[layer.fqid];
     }
 
@@ -422,7 +437,7 @@ class Tile {
         const gl = context.gl;
         const atlas = this.imageAtlas;
         if (atlas && !atlas.uploaded) {
-            const hasPattern = !!Object.keys(atlas.patternPositions).length;
+            const hasPattern = !!atlas.patternPositions.size;
             this.imageAtlasTexture = new Texture(context, atlas.image, gl.RGBA8, {useMipmap: hasPattern});
             (this.imageAtlas).uploaded = true;
         }
@@ -462,7 +477,7 @@ class Tile {
     queryRenderedFeatures(
         query: QrfQuery,
         tilespaceGeometry: TilespaceQueryGeometry,
-        availableImages: Array<string>,
+        availableImages: ImageId[],
         transform: Transform,
         sourceCacheTransform: Transform,
         visualizeQueryGeometry: boolean,
@@ -496,7 +511,8 @@ class Tile {
                 pixelPosMatrix,
                 transform,
                 availableImages,
-                tileTransform: this.tileTransform
+                tileTransform: this.tileTransform,
+                worldview: this.worldview
             }
         );
     }
@@ -524,9 +540,9 @@ class Tile {
             const feature = layer.feature(i);
             if (filter.needGeometry) {
                 const evaluationFeature = toEvaluationFeature(feature, true);
-                if (!filter.filter(new EvaluationParameters(this.tileID.overscaledZ), evaluationFeature, this.tileID.canonical))
+                if (!filter.filter(new EvaluationParameters(this.tileID.overscaledZ, {worldview: this.worldview}), evaluationFeature, this.tileID.canonical))
                     continue;
-            } else if (!filter.filter(new EvaluationParameters(this.tileID.overscaledZ), feature)) {
+            } else if (!filter.filter(new EvaluationParameters(this.tileID.overscaledZ, {worldview: this.worldview}), feature)) {
                 continue;
             }
             const id = featureIndex.getId(feature, sourceLayer);
@@ -537,15 +553,19 @@ class Tile {
         }
     }
 
+    loaded(): boolean {
+        return this.state === 'loaded' || this.state === 'errored';
+    }
+
     hasData(): boolean {
         return this.state === 'loaded' || this.state === 'reloading' || this.state === 'expired';
     }
 
     patternsLoaded(): boolean {
-        return !!this.imageAtlas && !!Object.keys(this.imageAtlas.patternPositions).length;
+        return !!this.imageAtlas && !!this.imageAtlas.patternPositions.size;
     }
 
-    setExpiryData(data: any) {
+    setExpiryData(data: ExpiryData) {
         const prior = this.expirationTime;
 
         if (data.cacheControl) {
@@ -625,7 +645,7 @@ class Tile {
             if (!painter.style.hasLayer(id)) continue;
 
             const bucket = this.buckets[id];
-            const bucketLayer = bucket.layers[0] as StyleLayer;
+            const bucketLayer = bucket.layers[0];
             // Buckets are grouped by common source-layer
             const sourceLayerId = bucketLayer['sourceLayer'] || '_geojsonTileLayer';
             const sourceLayer = vtLayers[sourceLayerId];
@@ -636,7 +656,7 @@ class Tile {
                 sourceLayerStates = sourceCache._state.getState(sourceLayerId, undefined) as FeatureStates;
             }
 
-            const imagePositions: SpritePositions = (this.imageAtlas && this.imageAtlas.patternPositions) || {};
+            const imagePositions: SpritePositions = this.imageAtlas ? Object.fromEntries(this.imageAtlas.patternPositions) : {};
             const withStateUpdates = Object.keys(sourceLayerStates).length > 0 && !isBrightnessChanged;
             const layers = withStateUpdates ? bucket.stateDependentLayers : bucket.layers;
             const updatesWithoutStateDependentLayers = withStateUpdates && !bucket.stateDependentLayers.length;
@@ -644,7 +664,7 @@ class Tile {
                 bucket.update(sourceLayerStates, sourceLayer, availableImages, imagePositions, layers, isBrightnessChanged, brightness);
             }
             if (bucket instanceof LineBucket || bucket instanceof FillBucket) {
-                if (painter._terrain && painter._terrain.enabled && sourceCache && bucket.programConfigurations.needsUpload) {
+                if (painter._terrain && painter._terrain.enabled && sourceCache && bucket.uploadPending()) {
                     painter._terrain._clearRenderCacheForTile(sourceCache.id, this.tileID);
                 }
             }
@@ -683,15 +703,15 @@ class Tile {
         }
     }
 
-    setDependencies(namespace: string, dependencies: Array<string>) {
-        const index: Record<string, any> = {};
+    setDependencies(namespace: string, dependencies: StringifiedImageId[]) {
+        const index: Record<string, boolean> = {};
         for (const dep of dependencies) {
             index[dep] = true;
         }
         this.dependencies[namespace] = index;
     }
 
-    hasDependency(namespaces: Array<string>, keys: Array<string>): boolean {
+    hasDependency(namespaces: Array<string>, keys: StringifiedImageId[]): boolean {
         for (const namespace of namespaces) {
             const dependencies = this.dependencies[namespace];
             if (dependencies) {
@@ -761,7 +781,8 @@ class Tile {
             for (const {x, y} of boundsLine) {
                 boundsVertices.emplaceBack(x, y, 0, 0);
             }
-            const indices = earcut(boundsVertices.int16, undefined, 4);
+            const indices = earcut(boundsVertices.int16.subarray(0, boundsVertices.length * 4), undefined, 4);
+
             for (let i = 0; i < indices.length; i += 3) {
                 boundsIndices.emplaceBack(indices[i], indices[i + 1], indices[i + 2]);
             }

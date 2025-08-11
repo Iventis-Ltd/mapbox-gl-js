@@ -3,11 +3,11 @@ import MercatorCoordinate, {mercatorXfromLng, mercatorYfromLat, mercatorZfromAlt
 import {getProjection} from './projection/index';
 import {tileAABB} from '../geo/projection/tile_transform';
 import Point from '@mapbox/point-geometry';
-import {wrap, clamp, pick, radToDeg, degToRad, getAABBPointSquareDist, furthestTileCorner, warnOnce, deepEqual} from '../util/util';
+import {wrap, clamp, pick, radToDeg, degToRad, getAABBPointSquareDist, furthestTileCorner, warnOnce, deepEqual, easeIn} from '../util/util';
 import {number as interpolate} from '../style-spec/util/interpolate';
 import EXTENT from '../style-spec/data/extent';
 import {vec4, mat4, mat2, vec3, quat} from 'gl-matrix';
-import {Frustum, FrustumCorners, Ray} from '../util/primitives';
+import {FAR_BL, FAR_BR, Frustum, FrustumCorners, NEAR_BL, NEAR_BR, Ray} from '../util/primitives';
 import EdgeInsets from './edge_insets';
 import {FreeCamera, FreeCameraOptions, orientationFromFrame} from '../ui/free_camera';
 import assert from 'assert';
@@ -25,6 +25,7 @@ import {
     aabbForTileOnGlobe,
 } from '../geo/projection/globe_util';
 import {projectClamped} from '../symbol/projection';
+import {edgeIntersectsBox} from '../util/intersection_tests';
 
 import type {Aabb} from '../util/primitives';
 import type Projection from '../geo/projection/projection';
@@ -58,27 +59,26 @@ type RootTile = {
     zoom: number;
 };
 
-const OrthographicPitchTranstionValue = 15;
-const lerp = (x: number, y: number, t: number) => { return (1 - t) * x + t * y; };
-const easeIn = (x: number) => {
-    return x * x * x * x * x;
-};
+export const OrthographicPitchTranstionValue = 15;
+
 const lerpMatrix = (out: mat4, a: mat4, b: mat4, value: number) => {
     for (let i = 0; i < 16; i++) {
-        out[i] = lerp(a[i], b[i], value);
+        out[i] = interpolate(a[i], b[i], value);
     }
 
     return out;
 };
 
-const enum QuadrantVisibility {
-    None = 0,
-    TopLeft = 1,
-    TopRight = 2,
-    BottomLeft = 4,
-    BottomRight = 8,
-    All = 15
-}
+const QuadrantVisibility = {
+    None: 0,
+    TopLeft: 1,
+    TopRight: 2,
+    BottomLeft: 4,
+    BottomRight: 8,
+    All: 15
+} as const;
+
+type QuadrantMask = typeof QuadrantVisibility[keyof typeof QuadrantVisibility];
 
 /**
  * A single transform, generally used for a single tile to be
@@ -219,6 +219,8 @@ class Transform {
 
     _orthographicProjectionAtLowPitch: boolean;
 
+    _allowWorldUnderZoom: boolean;
+
     constructor(minZoom?: number | null, maxZoom?: number | null, minPitch?: number | null, maxPitch?: number | null, renderWorldCopies?: boolean, projection?: ProjectionSpecification | null, bounds?: LngLatBounds | null) {
         this.tileSize = 512; // constant
 
@@ -262,10 +264,12 @@ class Transform {
         this._horizonShift = 0.1;
 
         this._orthographicProjectionAtLowPitch = false;
+
+        this._allowWorldUnderZoom = false;
     }
 
     clone(): Transform {
-        const clone = new Transform(this._minZoom, this._maxZoom, this._minPitch, this.maxPitch, this._renderWorldCopies, this.getProjection());
+        const clone = new Transform(this._minZoom, this._maxZoom, this._minPitch, this.maxPitch, this._renderWorldCopies, this.getProjection(), this.maxBounds);
         clone._elevation = this._elevation;
         clone._centerAltitude = this._centerAltitude;
         clone._centerAltitudeValidForExaggeration = this._centerAltitudeValidForExaggeration;
@@ -290,6 +294,7 @@ class Transform {
         clone._calcMatrices();
         clone.freezeTileCoverage = this.freezeTileCoverage;
         clone.frustumCorners = this.frustumCorners;
+        clone._allowWorldUnderZoom = this._allowWorldUnderZoom;
         return clone;
     }
 
@@ -485,6 +490,14 @@ class Transform {
         return this._fov / Math.PI * 180;
     }
 
+    set fov(fov: number) {
+        fov = Math.max(0.01, Math.min(60, fov));
+        if (this._fov === fov) return;
+        this._unmodified = false;
+        this._fov = degToRad(fov);
+        this._calcMatrices();
+    }
+
     get fovX(): number {
         return this._fov;
     }
@@ -492,14 +505,6 @@ class Transform {
     get fovY(): number {
         const focalLength = 1.0 / Math.tan(this.fovX * 0.5);
         return 2 * Math.atan((1.0 / this.aspect) / focalLength);
-    }
-
-    set fov(fov: number) {
-        fov = Math.max(0.01, Math.min(60, fov));
-        if (this._fov === fov) return;
-        this._unmodified = false;
-        this._fov = degToRad(fov);
-        this._calcMatrices();
     }
 
     get averageElevation(): number {
@@ -566,7 +571,7 @@ class Transform {
         }
         const height = this.cameraToCenterDistance;
         const terrainElevation = this.pixelsPerMeter * this._centerAltitude;
-        const mercatorZ = (terrainElevation + height) / this.worldSize;
+        const mercatorZ = Math.max(0, (terrainElevation + height) / this.worldSize);
 
         // MSL (Mean Sea Level) zoom describes the distance of the camera to the sea level (altitude).
         // It is used only for manipulating the camera location. The standard zoom (this._zoom)
@@ -850,18 +855,18 @@ class Transform {
     }
 
     /**
-     * Extends tile coverage to include potential neighboring tiles using either light direction or quadrant visibility information.
+     * Extends tile coverage to include potential neighboring tiles using either a direction vector or quadrant visibility information.
      * @param {Array<OverscaledTileID>} coveringTiles tile cover that is extended
      * @param {number} maxZoom maximum zoom level
-     * @param {Vec3} lightDir direction of the light (unit vector), if undefined quadrant visibility information is used
+     * @param {vec3} direction direction unit vector, if undefined quadrant visibility information is used
      * @returns {Array<OverscaledTileID>} a set of extension tiles
      */
-    extendTileCover(coveringTiles: Array<OverscaledTileID>, maxZoom: number, lightDir?: vec3): Array<OverscaledTileID> {
+    extendTileCover(coveringTiles: Array<OverscaledTileID>, maxZoom: number, direction?: vec3): Array<OverscaledTileID> {
         let out: OverscaledTileID[] = [];
-        const extendShadows = lightDir !== undefined;
-        const extendQuadrants = !extendShadows;
+        const extendDirection = direction != null;
+        const extendQuadrants = !extendDirection;
         if (extendQuadrants && this.zoom < maxZoom) return out;
-        if (extendShadows && lightDir[0] === 0.0 && lightDir[1] === 0.0) return out;
+        if (extendDirection && direction[0] === 0.0 && direction[1] === 0.0) return out;
 
         const addedTiles = new Set<number>();
         const addTileId = (overscaledZ: number, wrap: number, z: number, x: number, y: number) => {
@@ -895,29 +900,29 @@ class Transform {
             const leftTileX = xMinInsideRange ? tileId.x - 1 : tiles - 1;
             const rightTileX = xMaxInsideRange ? tileId.x + 1 : 0;
 
-            if (extendShadows) {
-                if (lightDir[0] < 0.0) {
+            if (extendDirection) {
+                if (direction[0] < 0.0) {
                     addTileId(overscaledZ, rightWrap, tileId.z, rightTileX, tileId.y);
-                    if (lightDir[1] < 0.0 && yMaxInsideRange) {
+                    if (direction[1] < 0.0 && yMaxInsideRange) {
                         addTileId(overscaledZ, tileWrap, tileId.z, tileId.x, tileId.y + 1);
                         addTileId(overscaledZ, rightWrap, tileId.z, rightTileX, tileId.y + 1);
                     }
-                    if (lightDir[1] > 0.0 && yMinInsideRange) {
+                    if (direction[1] > 0.0 && yMinInsideRange) {
                         addTileId(overscaledZ, tileWrap, tileId.z, tileId.x, tileId.y - 1);
                         addTileId(overscaledZ, rightWrap, tileId.z, rightTileX, tileId.y - 1);
                     }
-                } else if (lightDir[0] > 0.0) {
+                } else if (direction[0] > 0.0) {
                     addTileId(overscaledZ, leftWrap, tileId.z, leftTileX, tileId.y);
-                    if (lightDir[1] < 0.0 && yMaxInsideRange) {
+                    if (direction[1] < 0.0 && yMaxInsideRange) {
                         addTileId(overscaledZ, tileWrap, tileId.z, tileId.x, tileId.y + 1);
                         addTileId(overscaledZ, leftWrap, tileId.z, leftTileX, tileId.y + 1);
                     }
-                    if (lightDir[1] > 0.0 && yMinInsideRange) {
+                    if (direction[1] > 0.0 && yMinInsideRange) {
                         addTileId(overscaledZ, tileWrap, tileId.z, tileId.x, tileId.y - 1);
                         addTileId(overscaledZ, leftWrap, tileId.z, leftTileX, tileId.y - 1);
                     }
                 } else {
-                    if (lightDir[1] < 0.0 && yMaxInsideRange) {
+                    if (direction[1] < 0.0 && yMaxInsideRange) {
                         addTileId(overscaledZ, tileWrap, tileId.z, tileId.x, tileId.y + 1);
                     } else if (yMinInsideRange) {
                         addTileId(overscaledZ, tileWrap, tileId.z, tileId.x, tileId.y - 1);
@@ -999,6 +1004,97 @@ class Transform {
 
         return out;
     }
+
+    /**
+     * Extend tile coverage to include tiles that are below the view frustum.
+     * @param {Array<OverscaledTileID>} tiles tile cover that is extended
+     * @param {Frustum} frustum view frustum
+     * @param {number} maxZoom maximum zoom level
+     * @returns {Array<OverscaledTileID>} a set of extension tiles
+     */
+    extendTileCoverToNearPlane(tiles: Array<OverscaledTileID>, frustum: Frustum, maxZoom: number): Array<OverscaledTileID> {
+        const out: OverscaledTileID[] = [];
+
+        const addedTiles = new Set<number>();
+        // Add existing tile keys to prevent having to remove duplicates later
+        for (const tile of tiles) {
+            addedTiles.add(tile.key);
+        }
+        const addTileId = (overscaledZ: number, wrap: number, z: number, x: number, y: number) => {
+            const key = calculateKey(wrap, overscaledZ, z, x, y);
+            if (!addedTiles.has(key)) {
+                out.push(new OverscaledTileID(overscaledZ, wrap, z, x, y));
+                addedTiles.add(key);
+            }
+        };
+
+        const overscaledZ = tiles.reduce((overscaledZ, tile) => {
+            return Math.max(overscaledZ, tile.overscaledZ);
+        }, maxZoom);
+
+        const numTiles = 1 << maxZoom;
+
+        const tileCorners = [
+            new Point(0, 0),
+            new Point(EXTENT, 0),
+            new Point(EXTENT, EXTENT),
+            new Point(0, EXTENT)
+        ];
+
+        const p1 = new Point(0, 0);
+        const p2 = new Point(0, 0);
+
+        const findTileIntersections = (e1: vec3, e2: vec3) => {
+            const e1X = Math.floor(e1[0]);
+            const e1Y = Math.floor(e1[1]);
+            const e1TileX = (e1[0] - e1X) * EXTENT;
+            const e1TileY = (e1[1] - e1Y) * EXTENT;
+
+            const e2X = Math.floor(e2[0]);
+            const e2Y = Math.floor(e2[1]);
+            const e2TileX = (e2[0] - e2X) * EXTENT;
+            const e2TileY = (e2[1] - e2Y) * EXTENT;
+
+            // Find tile intersections from a 3x3 grid around the starting point.
+            // This is enough to find the tiles needed for the tile cover extension.
+            for (let dx = -1; dx <= 1; dx++) {
+                const x = e1X + dx;
+                if (x < 0 || x >= numTiles) continue;
+
+                // Convert e1 and e2 (x coord) to the coordinate space of the current tile
+                p1.x = e1TileX - dx * EXTENT;
+                p2.x = e2TileX - (x - e2X) * EXTENT;
+
+                for (let dy = -1; dy <= 1; dy++) {
+                    const y = e1Y + dy;
+
+                    // Convert e1 and e2 (y coord) to the coordinate space of the current tile
+                    p1.y = e1TileY - dy * EXTENT;
+                    p2.y = e2TileY - (y - e2Y) * EXTENT;
+
+                    if (edgeIntersectsBox(p1, p2, tileCorners)) {
+                        addTileId(overscaledZ, 0, maxZoom, x, y);
+                    }
+                }
+            }
+        };
+
+        const points = frustum.points;
+        const nearBl = points[NEAR_BL];
+        const nearBr = points[NEAR_BR];
+        const farBl = this._projectToGround(nearBl, points[FAR_BL]);
+        const farBr = this._projectToGround(nearBr, points[FAR_BR]);
+
+        findTileIntersections(nearBl, farBl);
+        findTileIntersections(nearBr, farBr);
+
+        return out;
+    }
+
+    _projectToGround(near: vec3, far: vec3) {
+        assert(far[2] < near[2]);
+        return vec3.lerp(vec3.create(), near, far, near[2] / (near[2] - far[2]));
+    };
 
     /**
      * Return all coordinates that could cover this transform for a covering
@@ -1115,7 +1211,7 @@ class Transform {
 
         // Do a depth-first traversal to find visible tiles and proper levels of detail
         const stack: RootTile[] = [];
-        let result = [];
+        let result: Array<{tileID: OverscaledTileID, distanceSq: number}> = [];
         const maxZoom = z;
         const overscaledZ = options.reparseOverscaled ? actualZ : z;
         const cameraHeight = (cameraAltitude - this._centerAltitude) * meterToTile; // in tile coordinates.
@@ -1316,8 +1412,7 @@ class Transform {
                     continue;
                 }
 
-                let visibility = QuadrantVisibility.None;
-                // Perform more precise intersection tests to cull the remaining < 1% false positives from the earlier test.
+                let visibility: QuadrantMask = QuadrantVisibility.None;
                 if (!fullyVisible) {
                     let intersectResult = verticalFrustumIntersect ? it.aabb.intersectsPrecise(cameraFrustum) : it.aabb.intersectsPreciseFlat(cameraFrustum);
 
@@ -1514,11 +1609,12 @@ class Transform {
      * This method is coupled with {@see pointLocation} in 3D mode to model map manipulation
      * using flat plane approach to keep constant elevation above ground.
      * @param {LngLat} lnglat location
+     * @param {number} altitude (optional) altitude above the map plane in meters.
      * @returns {Point} screen point
      * @private
      */
-    locationPoint(lnglat: LngLat): Point {
-        return this.projection.locationPoint(this, lnglat);
+    locationPoint(lnglat: LngLat, altitude?: number): Point {
+        return this.projection.locationPoint(this, lnglat, altitude);
     }
 
     /**
@@ -1526,11 +1622,12 @@ class Transform {
      * In 3D mode (when terrain is enabled) elevation is sampled for the point before
      * projecting it. In 2D mode, behaves the same locationPoint.
      * @param {LngLat} lnglat location
+     * @param {number} altitude (optional) altitude above the map plane in meters.
      * @returns {Point} screen point
      * @private
      */
-    locationPoint3D(lnglat: LngLat): Point {
-        return this.projection.locationPoint(this, lnglat, true);
+    locationPoint3D(lnglat: LngLat, altitude?: number): Point {
+        return this.projection.locationPoint(this, lnglat, altitude, true);
     }
 
     /**
@@ -1548,17 +1645,19 @@ class Transform {
      * In 3D mode (map with terrain) returns location of terrain raycast point.
      * In 2D mode, behaves the same as {@see pointLocation}.
      * @param {Point} p screen point
+     * @param {number} altitude (optional) altitude above the map plane in meters.
      * @returns {LngLat} lnglat location
      * @private
      */
-    pointLocation3D(p: Point): LngLat {
-        return this.coordinateLocation(this.pointCoordinate3D(p));
+    pointLocation3D(p: Point, altitude?: number): LngLat {
+        return this.coordinateLocation(this.pointCoordinate3D(p, altitude));
     }
 
     /**
      * Given a geographical lngLat, return an unrounded
      * coordinate that represents it at this transform's zoom level.
      * @param {LngLat} lngLat
+     * @param {number} altitude (optional) altitude above the map plane in meters.
      * @returns {Coordinate}
      * @private
      */
@@ -1672,14 +1771,15 @@ class Transform {
      * In 3D mode, raycast to terrain. In 2D mode, behaves the same as {@see pointCoordinate}.
      * For p above terrain, don't return point behind camera but clamp p.y at the top of terrain.
      * @param {Point} p top left origin screen point, in pixels.
+     * @param {number} altitude (optional) altitude above the map plane in meters.
      * @private
      */
-    pointCoordinate3D(p: Point): MercatorCoordinate {
-        if (!this.elevation) return this.pointCoordinate(p);
+    pointCoordinate3D(p: Point, altitude?: number): MercatorCoordinate {
+        if (!this.elevation) return this.pointCoordinate(p, altitude);
         let raycast: vec3 | null | undefined = this.projection.pointCoordinate3D(this, p.x, p.y);
         if (raycast) return new MercatorCoordinate(raycast[0], raycast[1], raycast[2]);
         let start = 0, end = this.horizonLineFromTop();
-        if (p.y > end) return this.pointCoordinate(p); // holes between tiles below horizon line or below bottom.
+        if (p.y > end) return this.pointCoordinate(p, altitude); // holes between tiles below horizon line or below bottom.
         const samples = 10;
         const threshold = 0.02 * end;
         const r = p.clone();
@@ -2003,7 +2103,7 @@ class Transform {
         expanded: boolean = false,
     ): mat4 {
         const projMatrixKey = unwrappedTileID.key;
-        let cache;
+        let cache: Record<number, mat4>;
         if (expanded) {
             cache = this._expandedProjMatrixCache;
         } else if (aligned) {
@@ -2184,10 +2284,10 @@ class Transform {
             }
         }
 
-        if (x2 !== x || y2 !== y) { // pan the map to fit the range
+        if ((x2 !== x || y2 !== y) && !this._allowWorldUnderZoom) { // pan the map to fit the range
             this.center = this.unproject(new Point(x2, y2));
         }
-        if (s) { // scale the map to fit the range
+        if (s && !this._allowWorldUnderZoom) { // scale the map to fit the range
             this.zoom += this.scaleZoom(s);
         }
 
@@ -2203,7 +2303,7 @@ class Transform {
      * @returns {number} The zoom value.
      */
     _minZoomForBounds(): number {
-        let minZoom = Math.max(0, this.scaleZoom(this.height / (this.worldMaxY - this.worldMinY)));
+        let minZoom = Math.max(0, this.scaleZoom(Math.max(0, this.height) / (this.worldMaxY - this.worldMinY)));
         if (this.maxBounds) {
             minZoom = Math.max(minZoom, this.scaleZoom(this.width / (this.worldMaxX - this.worldMinX)));
         }
@@ -2362,7 +2462,7 @@ class Transform {
             dx = x - Math.round(x) + angleCos * xShift + angleSin * yShift,
             dy = y - Math.round(y) + angleCos * yShift + angleSin * xShift;
         const alignedM = new Float64Array(m) as unknown as mat4;
-        mat4.translate(alignedM, alignedM, [ dx > 0.5 ? dx - 1 : dx, dy > 0.5 ? dy - 1 : dy, 0 ]);
+        mat4.translate(alignedM, alignedM, [dx > 0.5 ? dx - 1 : dx, dy > 0.5 ? dy - 1 : dy, 0]);
         this.alignedProjMatrix = alignedM;
 
         m = mat4.create();
@@ -2530,7 +2630,7 @@ class Transform {
     }
 
     _zoomFromMercatorZ(z: number): number {
-        return this.scaleZoom(this.cameraToCenterDistance / (z * this.tileSize));
+        return this.scaleZoom(this.cameraToCenterDistance / (Math.max(0, z) * this.tileSize));
     }
 
     // This function is helpful to approximate true zoom given a mercator height with varying ppm.
@@ -2554,7 +2654,7 @@ class Transform {
 
             const worldSize = this.tileSize * Math.pow(2, zoomMid);
             const d = this.getCameraToCenterDistance(this.projection, zoomMid, worldSize);
-            const newZoom = this.scaleZoom(d / (mercatorZ * this.tileSize));
+            const newZoom = this.scaleZoom(d / (Math.max(0, mercatorZ) * this.tileSize));
 
             const diff = Math.abs(zoomMid - newZoom);
 
@@ -2692,7 +2792,7 @@ class Transform {
         // to calculate correct perspective ratio values for symbols
         if (this.isOrthographic) {
             const mixValue = this.pitch >= OrthographicPitchTranstionValue ? 1.0 : this.pitch / OrthographicPitchTranstionValue;
-            distance = lerp(1.0, distance, easeIn(mixValue));
+            distance = interpolate(1.0, distance, easeIn(mixValue));
         }
         return distance;
     }

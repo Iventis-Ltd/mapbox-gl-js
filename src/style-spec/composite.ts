@@ -1,9 +1,9 @@
-// @ts-nocheck
+import type {StyleSpecification} from './types';
 
-export default function (style) {
-    const styleIDs = [];
-    const sourceIDs = [];
-    const compositedSourceLayers = [];
+export default function (style: StyleSpecification): StyleSpecification {
+    const styleIDs: string[] = [];
+    const sourceIDs: string[] = [];
+    const compositedSourceLayers: string[] = [];
 
     for (const id in style.sources) {
         const source = style.sources[id];

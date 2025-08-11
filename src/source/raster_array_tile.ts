@@ -1,16 +1,19 @@
+import Pbf from 'pbf';
 import Tile from './tile';
 import Texture from '../render/texture';
+import {RGBAImage} from '../util/image';
 import {getArrayBuffer} from '../util/ajax';
 import {MapboxRasterTile} from '../data/mrt/mrt.esm.js';
-import Pbf from 'pbf';
 
 import type Painter from '../render/painter';
 import type Framebuffer from '../gl/framebuffer';
 import type {Callback} from '../types/callback';
 import type {Cancelable} from '../types/cancelable';
 import type {TextureImage} from '../render/texture';
+import type {TDecodingResult} from '../data/mrt/types';
 import type {OverscaledTileID} from './tile_id';
 import type {RequestParameters, ResponseCallback} from '../util/ajax';
+import type {MapboxRasterLayer, MRTDecodingBatch} from '../data/mrt/mrt.esm.js';
 
 MapboxRasterTile.setPbf(Pbf);
 
@@ -25,103 +28,72 @@ export type TextureDescriptor = {
     format?: 'uint8' | 'uint16' | 'uint32';
 };
 
-export type MRTLayer = {
-    version: number;
-    name: string;
-    units: string;
-    tilesize: number;
-    buffer: number;
-    pixelFormat: 'uint8' | 'uint16' | 'uint32';
-    dataIndex: Partial<Record<string | number, any>>;
-    hasBand: (arg1: string | number) => boolean;
-    hasDataForBand: (arg1: string | number) => boolean;
-    getDataRange: (arg1: Array<string | number>) => MRTDataRange;
-    getBandView: (arg1: string | number) => MRTBandView;
-};
-
-export type MRTBandView = {
-    data: any;
-    bytes: any;
-    tileSize: number;
-    buffer: number;
-    offset: number;
-    scale: number;
-};
-
-export type MRTDataRange = {
-    layerName: string;
-    firstByte: number;
-    lastByte: number;
-    firstBlock: number;
-    lastBlock: number;
-};
-
-export type MRTDecodingBatch = {
-    tasks: Array<MRTDecodingTask>;
-    cancel: () => void;
-    complete: (arg1?: Error | null, arg2?: ArrayBuffer | null) => void;
-};
-
-export type MRTDecodingTask = {
-    layerName: string;
-    firstByte: number;
-    lastByte: number;
-    pixelFormat: 'uint8' | 'uint16' | 'uint32';
-    blockIndex: number;
-    blockShape: Array<number>;
-    buffer: number;
-    codec: string;
-    filters: Array<string>;
-};
-
-export type MRT = {
-    x: number;
-    y: number;
-    z: number;
-    _cacheSize: number;
-    layers: {
-        [_: string]: MRTLayer;
-    };
-    getLayer: (arg1: string) => MRTLayer | null | undefined;
-    parseHeader: (arg1: ArrayBuffer) => MRT;
-    getHeaderLength: (arg1: ArrayBuffer) => number;
-    createDecodingTask: (arg1: MRTDataRange) => MRTDecodingBatch;
-};
-
 const FIRST_TRY_HEADER_LENGTH = 16384;
 const MRT_DECODED_BAND_CACHE_SIZE = 30;
 
-class RasterArrayTile extends Tile {
-    override texture: Texture | null | undefined;
+class RasterArrayTile extends Tile implements Tile {
     entireBuffer: ArrayBuffer | null | undefined;
     requestParams: RequestParameters | null | undefined;
 
-    _workQueue: Array<() => void>;
-    _fetchQueue: Array<() => void>;
+    _workQueuePerLayer: Map<string, Array<() => void>>;
+    _fetchQueuePerLayer: Map<string, Array<() => void>>;
 
     fbo: Framebuffer | null | undefined;
-    textureDescriptor: TextureDescriptor | null | undefined;
+    textureDescriptorPerLayer: Map<string, TextureDescriptor | null | undefined>;
+    texturePerLayer: Map<string, Texture | null | undefined>;
+    textureSourceLayer: string | null | undefined;
 
-    _mrt: MRT | null | undefined;
+    source?: string;
+    scope?: string;
+
+    _mrt: MapboxRasterTile | null | undefined;
     _isHeaderLoaded: boolean;
 
     constructor(tileID: OverscaledTileID, size: number, tileZoom: number, painter?: Painter | null, isRaster?: boolean) {
         super(tileID, size, tileZoom, painter, isRaster);
 
-        this._workQueue = [];
-        this._fetchQueue = [];
+        this._workQueuePerLayer = new Map();
+        this._fetchQueuePerLayer = new Map();
         this._isHeaderLoaded = false;
+        this.textureDescriptorPerLayer = new Map();
+        this.texturePerLayer = new Map();
     }
 
-    override setTexture(img: TextureImage, painter: Painter) {
+    /**
+     * Returns a map of all layers in the raster array tile.
+     * @returns {Record<string, MapboxRasterLayer>}
+     * @private
+     */
+    getLayers(): MapboxRasterLayer[] {
+        return this._mrt ? Object.values(this._mrt.layers) : [];
+    }
+
+    /**
+     * Returns a layer in the raster array tile.
+     * @param {string} layerId
+     * @returns {MapboxRasterLayer | null | undefined}
+     * @private
+     */
+    getLayer(layerId: string): MapboxRasterLayer | null | undefined {
+        return this._mrt && this._mrt.getLayer(layerId);
+    }
+
+    /**
+     * @private
+     */
+    setTexturePerLayer(sourceLayer: string, img: TextureImage, painter: Painter) {
         const context = painter.context;
         const gl = context.gl;
-        this.texture = this.texture || painter.getTileTexture(img.width);
+        let texture = this.texturePerLayer.get(sourceLayer) || painter.getTileTexture(img.width);
 
-        if (this.texture && this.texture instanceof Texture) {
-            this.texture.update(img, {premultiply: false});
+        if (texture && texture instanceof Texture) {
+            texture.update(img, {premultiply: false});
         } else {
-            this.texture = new Texture(context, img, gl.RGBA8, {premultiply: false});
+            texture = new Texture(context, img, gl.RGBA8, {premultiply: false});
+        }
+
+        if (!this.texturePerLayer.has(sourceLayer)) {
+            this.texturePerLayer.set(sourceLayer, texture);
         }
     }
 
@@ -129,13 +101,35 @@ class RasterArrayTile extends Tile {
      * Stops existing fetches
      * @private
      */
-    flushQueues() {
-        while (this._workQueue.length) {
-            (this._workQueue.pop())();
+    flushQueues(sourceLayer: string) {
+        const workQueue = this._workQueuePerLayer.get(sourceLayer) || [];
+        const fetchQueue = this._fetchQueuePerLayer.get(sourceLayer) || [];
+
+        while (workQueue.length) {
+            (workQueue.pop())();
         }
 
-        while (this._fetchQueue.length) {
-            (this._fetchQueue.pop())();
+        while (fetchQueue.length) {
+            (fetchQueue.pop())();
+        }
+    }
+
+    /**
+     * @private
+     */
+    flushAllQueues() {
+        for (const sourceLayer of this._workQueuePerLayer.keys()) {
+            const workQueue = this._workQueuePerLayer.get(sourceLayer) || [];
+            while (workQueue.length) {
+                (workQueue.pop())();
+            }
+        }
+
+        for (const sourceLayer of this._fetchQueuePerLayer.keys()) {
+            const fetchQueue = this._fetchQueuePerLayer.get(sourceLayer) || [];
+            while (fetchQueue.length) {
+                (fetchQueue.pop())();
+            }
         }
     }
 
@@ -143,7 +137,6 @@ class RasterArrayTile extends Tile {
         fetchLength: number | null | undefined = FIRST_TRY_HEADER_LENGTH,
         callback: ResponseCallback<ArrayBuffer | null | undefined>,
     ): Cancelable {
-        // @ts-expect-error - TS2739 - Type 'MapboxRasterTile' is missing the following properties from type 'MRT': x, y, z, _cacheSize, layers
         const mrt = this._mrt = new MapboxRasterTile(MRT_DECODED_BAND_CACHE_SIZE);
 
         const headerRequestParams = Object.assign({}, this.requestParams, {headers: {Range: `bytes=0-${fetchLength - 1}`}});
@@ -172,7 +165,7 @@ class RasterArrayTile extends Tile {
                 // ignored by the server), then cache the buffer and neglect range requests.
                 let lastByte = 0;
                 for (const layer of Object.values(mrt.layers)) {
-                    lastByte = Math.max(lastByte, layer.dataIndex[layer.dataIndex.length - 1].last_byte);
+                    lastByte = Math.max(lastByte, layer.dataIndex[layer.dataIndex.length - 1].lastByte);
                 }
 
                 if (dataBuffer.byteLength >= lastByte) {
@@ -180,7 +173,7 @@ class RasterArrayTile extends Tile {
                 }
 
                 callback(null, (this.entireBuffer || dataBuffer), cacheControl, expires);
-            } catch (error: any) {
+            } catch (error) {
                 callback(error);
             }
         });
@@ -188,7 +181,7 @@ class RasterArrayTile extends Tile {
         return this.request;
     }
 
-    fetchBand(sourceLayer: string, band: string | number, callback: Callback<TextureImage | null | undefined>) {
+    fetchBand(sourceLayer: string, layerId: string, band: string | number, callback: Callback<TextureImage | null | undefined>) {
         // If header is not loaded, bail out of rendering.
         // Repaint on reload is handled by appropriate callbacks.
         const mrt = this._mrt;
@@ -204,29 +197,44 @@ class RasterArrayTile extends Tile {
         }
 
         // eslint-disable-next-line prefer-const
-        let task;
+        let task: MRTDecodingBatch;
 
-        const onDataDecoded = (err?: Error | null, result?: ArrayBuffer | null) => {
+        const onDataDecoded = (err?: Error | null, result?: TDecodingResult[]) => {
             task.complete(err, result);
             if (err) {
                 callback(err);
                 return;
             }
 
-            this.updateTextureDescriptor(sourceLayer, band);
-            callback(null, this.textureDescriptor && this.textureDescriptor.img);
+            this.updateTextureDescriptor(sourceLayer, layerId, band);
+            const textureDescriptor = this.textureDescriptorPerLayer.get(layerId);
+            callback(null, textureDescriptor && textureDescriptor.img);
         };
 
         const onDataLoaded = (err?: Error | null, buffer?: ArrayBuffer | null) => {
             if (err) return callback(err);
 
-            const params = {buffer, task};
-            const workerJob = actor.send('decodeRasterArray', params, onDataDecoded, undefined, true);
+            const params = {
+                type: 'raster-array',
+                source: this.source,
+                scope: this.scope,
+                tileID: this.tileID,
+                uid: this.uid,
+                buffer,
+                task
+            };
 
-            this._workQueue.push(() => {
+            const workerJob = actor.send('decodeRasterArray', params, onDataDecoded, undefined, true);
+            const workQueue = this._workQueuePerLayer.get(layerId) || [];
+
+            workQueue.push(() => {
                 if (workerJob) workerJob.cancel();
                 task.cancel();
             });
+
+            if (!this._workQueuePerLayer.has(layerId)) {
+                this._workQueuePerLayer.set(layerId, workQueue);
+            }
         };
 
         const mrtLayer = mrt.getLayer(sourceLayer);
@@ -236,8 +244,9 @@ class RasterArrayTile extends Tile {
         }
 
         if (mrtLayer.hasDataForBand(band)) {
-            this.updateTextureDescriptor(sourceLayer, band);
-            callback(null, this.textureDescriptor ? this.textureDescriptor.img : null);
+            this.updateTextureDescriptor(sourceLayer, layerId, band);
+            const textureDescriptor = this.textureDescriptorPerLayer.get(layerId);
+            callback(null, textureDescriptor ? textureDescriptor.img : null);
             return;
         }
 
@@ -253,7 +262,7 @@ class RasterArrayTile extends Tile {
         }
 
         // Stop existing fetches and decodes
-        this.flushQueues();
+        this.flushQueues(layerId);
 
         if (this.entireBuffer) {
             // eslint-disable-next-line no-warning-comments
@@ -262,22 +271,25 @@ class RasterArrayTile extends Tile {
         } else {
             const rangeRequestParams = Object.assign({}, this.requestParams, {headers: {Range: `bytes=${range.firstByte}-${range.lastByte}`}});
             const request = getArrayBuffer(rangeRequestParams, onDataLoaded);
-            this._fetchQueue.push(() => {
+            const fetchQueue = this._fetchQueuePerLayer.get(layerId) || [];
+            fetchQueue.push(() => {
                 request.cancel();
                 task.cancel();
             });
+            if (!this._fetchQueuePerLayer.has(layerId)) {
+                this._fetchQueuePerLayer.set(layerId, fetchQueue);
+            }
         }
     }
 
-    updateNeeded(sourceLayer: string, band: string | number): boolean {
-        const textureUpdateNeeded = !this.textureDescriptor ||
-            this.textureDescriptor.band !== band ||
-            this.textureDescriptor.layer !== sourceLayer;
+    updateNeeded(layerId: string, band: string | number): boolean {
+        const textureUpdateNeeded = !this.textureDescriptorPerLayer.get(layerId) ||
+            this.textureDescriptorPerLayer.get(layerId).band !== band;
 
         return textureUpdateNeeded && this.state !== 'errored';
     }
 
-    updateTextureDescriptor(sourceLayer: string, band: string | number): void {
+    updateTextureDescriptor(sourceLayer: string, layerId: string, band: string | number): void {
         if (!this._mrt) return;
 
         const mrtLayer = this._mrt.getLayer(sourceLayer);
@@ -285,14 +297,14 @@ class RasterArrayTile extends Tile {
 
         const {bytes, tileSize, buffer, offset, scale} = mrtLayer.getBandView(band);
         const size = tileSize + 2 * buffer;
-        const img = {data: bytes, width: size, height: size};
+        const img = new RGBAImage({width: size, height: size}, bytes);
 
-        const texture = this.texture;
+        const texture = this.texturePerLayer.get(layerId);
         if (texture && texture instanceof Texture) {
             texture.update(img, {premultiply: false});
         }
 
-        this.textureDescriptor = {
+        this.textureDescriptorPerLayer.set(layerId, {
             layer: sourceLayer,
             band,
             img,
@@ -306,8 +318,36 @@ class RasterArrayTile extends Tile {
                 scale * 65536,
                 scale * 16777216,
             ]
-        };
+        });
     }
+
+    override destroy(preserveTexture: boolean = false): void {
+        super.destroy(preserveTexture);
+
+        delete this._mrt;
+
+        if (!preserveTexture) {
+            for (const texture of this.texturePerLayer.values()) {
+                if (texture && texture instanceof Texture) {
+                    texture.destroy();
+                }
+            }
+        }
+
+        this.texturePerLayer.clear();
+        this.textureDescriptorPerLayer.clear();
+
+        if (this.fbo) {
+            this.fbo.destroy();
+            delete this.fbo;
+        }
+
+        delete this.request;
+        delete this.requestParams;
+
+        this._isHeaderLoaded = false;
+    }
+
 }
 
 export default RasterArrayTile;

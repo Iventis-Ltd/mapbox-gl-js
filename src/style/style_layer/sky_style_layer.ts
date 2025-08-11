@@ -15,10 +15,11 @@ import type {RGBAImage} from '../../util/image';
 import type SkyboxGeometry from '../../render/skybox_geometry';
 import type {Position} from '../../util/util';
 import type {LUT} from "../../util/lut";
+import type {ProgramName} from '../../render/program';
 
 function getCelestialDirection(azimuth: number, altitude: number, leftHanded: boolean): [number, number, number] {
     const up: [number, number, number] = [0, 0, 1];
-    const rotation = quat.identity([] as any);
+    const rotation = quat.identity([] as unknown as quat);
 
     quat.rotateY(rotation, rotation, leftHanded ? -degToRad(azimuth) + Math.PI : degToRad(azimuth));
     quat.rotateX(rotation, rotation, -degToRad(altitude));
@@ -28,6 +29,8 @@ function getCelestialDirection(azimuth: number, altitude: number, leftHanded: bo
 }
 
 class SkyLayer extends StyleLayer {
+    override type: 'sky';
+
     override _transitionablePaint: Transitionable<PaintProps>;
     override _transitioningPaint: Transitioning<PaintProps>;
     override paint: PossiblyEvaluated<PaintProps>;
@@ -49,6 +52,18 @@ class SkyLayer extends StyleLayer {
         };
         super(layer, properties, scope, lut, options);
         this._updateColorRamp();
+    }
+
+    override _clear() {
+        if (this.skyboxFbo) {
+            this.skyboxFbo.destroy();
+            this.skyboxFbo = null;
+        }
+        if (this.colorRampTexture) {
+            this.colorRampTexture.destroy();
+            this.colorRampTexture = null;
+        }
+        this._skyboxInvalidated = true;
     }
 
     override _handleSpecialPaintPropertyUpdate(name: string) {
@@ -121,7 +136,7 @@ class SkyLayer extends StyleLayer {
         return true;
     }
 
-    override getProgramIds(): string[] | null {
+    override getProgramIds(): ProgramName[] | null {
         const type = this.paint.get('sky-type');
         if (type === 'atmosphere') {
             return ['skyboxCapture', 'skybox'];

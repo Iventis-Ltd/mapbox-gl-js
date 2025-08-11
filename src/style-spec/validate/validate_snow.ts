@@ -9,7 +9,7 @@ export default function validateSnow(options: ValidationOptions): Array<Validati
     const style = options.style;
     const styleSpec = options.styleSpec;
     const snowSpec = styleSpec.snow;
-    let errors = [];
+    let errors: ValidationError[] = [];
 
     const rootType = getType(snow);
     if (snow === undefined) {

@@ -20,7 +20,8 @@ import type {Cancelable} from '../types/cancelable';
 import type {VectorSourceSpecification, PromoteIdSpecification} from '../style-spec/types';
 import type Actor from '../util/actor';
 import type {LoadVectorTileResult} from './load_vector_tile';
-import type {RequestedTileParameters, WorkerTileResult} from './worker_source';
+import type {WorkerSourceVectorTileRequest, WorkerSourceVectorTileResult} from './worker_source';
+import type {AJAXError} from '../util/ajax';
 
 /**
  * A source containing vector tiles in [Mapbox Vector Tile format](https://docs.mapbox.com/vector-tiles/reference/).
@@ -48,7 +49,7 @@ import type {RequestedTileParameters, WorkerTileResult} from './worker_source';
  * @see [Example: Add a vector tile source](https://docs.mapbox.com/mapbox-gl-js/example/vector-source/)
  * @see [Example: Add a third party vector tile source](https://docs.mapbox.com/mapbox-gl-js/example/third-party/)
  */
-class VectorTileSource extends Evented<SourceEvents> implements ISource {
+class VectorTileSource extends Evented<SourceEvents> implements ISource<'vector'> {
     type: 'vector';
     id: string;
     scope: string;
@@ -57,8 +58,8 @@ class VectorTileSource extends Evented<SourceEvents> implements ISource {
     url: string;
     scheme: string;
     tileSize: number;
-    minTileCacheSize?: number | null;
-    maxTileCacheSize?: number | null;
+    minTileCacheSize?: number;
+    maxTileCacheSize?: number;
     roundZoom?: boolean;
     attribution?: string;
     // eslint-disable-next-line camelcase
@@ -71,7 +72,7 @@ class VectorTileSource extends Evented<SourceEvents> implements ISource {
     map: Map;
     bounds?: [number, number, number, number] | null;
     tiles: Array<string>;
-    tileBounds: TileBounds;
+    tileBounds?: TileBounds;
     reparseOverscaled?: boolean;
     isTileClipped?: boolean;
     _tileJSONRequest?: Cancelable | null;
@@ -152,7 +153,7 @@ class VectorTileSource extends Evented<SourceEvents> implements ISource {
                     }
                 }
 
-                if (tileJSON.bounds) this.tileBounds = new TileBounds(tileJSON.bounds, this.minzoom, this.maxzoom);
+                this.tileBounds = TileBounds.fromTileJSON(tileJSON);
                 postTurnstileEvent(tileJSON.tiles, this.map._requestManager._customAccessToken);
 
                 // `content` is included here to prevent a race condition where `Style#updateSources` is called
@@ -251,7 +252,7 @@ class VectorTileSource extends Evented<SourceEvents> implements ISource {
         const lutForScope = this.map.style ? this.map.style.getLut(this.scope) : null;
         const lut = lutForScope ? {image: lutForScope.image.clone()} : null;
 
-        const params: RequestedTileParameters = {
+        const params: WorkerSourceVectorTileRequest = {
             request,
             data: undefined,
             uid: tile.uid,
@@ -272,13 +273,13 @@ class VectorTileSource extends Evented<SourceEvents> implements ISource {
             extraShadowCaster: tile.isExtraShadowCaster,
             tessellationStep: this.map._tessellationStep,
             scaleFactor: this.map.getScaleFactor(),
+            worldview: this.map.getWorldview() || this.worldviewDefault
         };
 
         // If we request a Mapbox URL, use the `worldview` param in the WorkerTile
         // to filter out features in the localizable layers
         // that are not visible in the current worldview.
         if (this.hasWorldviews && isMapboxURL(tileUrl)) {
-            params.worldview = this.map.getWorldview() || this.worldviewDefault;
             params.localizableLayerIds = this.localizableLayerIds;
         }
 
@@ -317,13 +318,12 @@ class VectorTileSource extends Evented<SourceEvents> implements ISource {
             tile.request = tile.actor.send('reloadTile', params, done.bind(this));
         }
 
-        function done(err?: Error | null, data?: WorkerTileResult | null) {
+        function done(err?: AJAXError | null, data?: WorkerSourceVectorTileResult | null) {
             delete tile.request;
 
             if (tile.aborted)
                 return callback(null);
 
-            // @ts-expect-error - TS2339 - Property 'status' does not exist on type 'Error'.
             if (err && err.status !== 404) {
                 return callback(err);
             }

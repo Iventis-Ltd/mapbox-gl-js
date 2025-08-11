@@ -23,6 +23,8 @@ import type {CreateProgramParams} from '../../render/painter';
 import type {DynamicDefinesType} from '../../render/program/program_uniforms';
 import type SourceCache from '../../source/source_cache';
 import type {LUT} from "../../util/lut";
+import type {ImageId} from '../../style-spec/expression/types/image_id';
+import type {ProgramName} from '../../render/program';
 
 let properties: {
     layout: Properties<LayoutProps>;
@@ -52,7 +54,8 @@ class LineFloorwidthProperty extends DataDrivenProperty<number> {
         parameters = new EvaluationParameters(Math.floor(parameters.zoom), {
             now: parameters.now,
             fadeDuration: parameters.fadeDuration,
-            transition: parameters.transition
+            transition: parameters.transition,
+            worldview: parameters.worldview
         });
         return super.possiblyEvaluate(value, parameters);
     }
@@ -83,6 +86,8 @@ const getLineFloorwidthProperty = () => {
 };
 
 class LineStyleLayer extends StyleLayer {
+    override type: 'line';
+
     override _unevaluatedLayout: Layout<LayoutProps>;
     override layout: PossiblyEvaluated<LayoutProps>;
 
@@ -109,6 +114,7 @@ class LineStyleLayer extends StyleLayer {
 
     override _handleSpecialPaintPropertyUpdate(name: string) {
         if (name === 'line-gradient') {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const expression: ZoomConstantExpression<'source'> = ((this._transitionablePaint._values['line-gradient'].value.expression) as any);
             this.stepInterpolant = expression._styleExpression && expression._styleExpression.expression instanceof Step;
             this.gradientVersion = (this.gradientVersion + 1) % Number.MAX_SAFE_INTEGER;
@@ -123,8 +129,9 @@ class LineStyleLayer extends StyleLayer {
         return this._transitionablePaint._values['line-width'].value.expression;
     }
 
-    override recalculate(parameters: EvaluationParameters, availableImages: Array<string>) {
+    override recalculate(parameters: EvaluationParameters, availableImages: ImageId[]) {
         super.recalculate(parameters, availableImages);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (this.paint._values as any)['line-floorwidth'] = getLineFloorwidthProperty().possiblyEvaluate(this._transitioningPaint._values['line-width'].value, parameters);
     }
 
@@ -132,9 +139,10 @@ class LineStyleLayer extends StyleLayer {
         return new LineBucket(parameters);
     }
 
-    override getProgramIds(): string[] {
+    override getProgramIds(): ProgramName[] {
         const patternProperty = this.paint.get('line-pattern');
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const image = patternProperty.constantOr((1 as any));
         const programId = image ? 'linePattern' : 'line';
         return [programId];
@@ -150,7 +158,7 @@ class LineStyleLayer extends StyleLayer {
     }
 
     override queryRadius(bucket: Bucket): number {
-        const lineBucket: LineBucket = (bucket as any);
+        const lineBucket = bucket as LineBucket;
         const width = getLineWidth(
             getMaximumPaintValue('line-width', this, lineBucket),
             getMaximumPaintValue('line-gap-width', this, lineBucket));
@@ -186,11 +194,15 @@ class LineStyleLayer extends StyleLayer {
     }
 
     override isTileClipped(): boolean {
-        return true;
+        return this.hasNonElevatedBuckets;
     }
 
     override isDraped(_?: SourceCache | null): boolean {
-        return !this.hasElevatedBuckets;
+        return !this.hasElevatedBuckets || (this.layout && this.layout.get('line-elevation-reference') === 'hd-road-markup');
+    }
+
+    override hasElevation(): boolean {
+        return this.layout && this.layout.get('line-elevation-reference') !== 'none';
     }
 }
 
@@ -225,5 +237,6 @@ function offsetLine(rings: Array<Array<Point>>, offset: number) {
         }
         newRings.push(newRing);
     }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
     return newRings;
 }

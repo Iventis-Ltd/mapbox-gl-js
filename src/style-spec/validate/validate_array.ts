@@ -5,6 +5,7 @@ import ValidationError from '../error/validation_error';
 import type {ValidationOptions} from './validate';
 
 type Options = ValidationOptions & {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     arrayElementValidator: any;
 };
 
@@ -44,7 +45,7 @@ export default function validateArray(options: Options): Array<ValidationError> 
         arrayElementSpec = arraySpec.value;
     }
 
-    let errors = [];
+    let errors: ValidationError[] = [];
     for (let i = 0; i < array.length; i++) {
         errors = errors.concat(validateArrayElement({
             array,
@@ -56,5 +57,6 @@ export default function validateArray(options: Options): Array<ValidationError> 
             key: `${key}[${i}]`
         }, true));
     }
+
     return errors;
 }

@@ -68,10 +68,10 @@ class Atmosphere {
         this.params = new StarsParams();
         this.updateNeeded = true;
 
-        painter.tp.registerParameter(this.params, ["Stars"], "starsCount", {min:100, max: 16000, step:1}, () => { this.updateNeeded = true; });
-        painter.tp.registerParameter(this.params, ["Stars"], "sizeMultiplier", {min:0.01, max: 2.0, step:0.01});
-        painter.tp.registerParameter(this.params, ["Stars"], "sizeRange", {min:0.0, max: 200.0, step:1}, () => { this.updateNeeded = true; });
-        painter.tp.registerParameter(this.params, ["Stars"], "intensityRange", {min:0.0, max: 200.0, step:1}, () => { this.updateNeeded = true; });
+        painter.tp.registerParameter(this.params, ["Stars"], "starsCount", {min: 100, max: 16000, step: 1}, () => { this.updateNeeded = true; });
+        painter.tp.registerParameter(this.params, ["Stars"], "sizeMultiplier", {min: 0.01, max: 2.0, step: 0.01});
+        painter.tp.registerParameter(this.params, ["Stars"], "sizeRange", {min: 0.0, max: 200.0, step: 1}, () => { this.updateNeeded = true; });
+        painter.tp.registerParameter(this.params, ["Stars"], "intensityRange", {min: 0.0, max: 200.0, step: 1}, () => { this.updateNeeded = true; });
     }
 
     update(painter: Painter) {
@@ -82,7 +82,7 @@ class Atmosphere {
 
             this.atmosphereBuffer = new AtmosphereBuffer(context);
 
-            // Part of internal stlye spec, not exposed to gl-js
+            // Part of internal style spec, not exposed to gl-js
             const sizeRange = this.params.sizeRange;
             const intensityRange = this.params.intensityRange;
 
@@ -95,7 +95,7 @@ class Atmosphere {
             let base = 0;
             for (let i = 0; i < stars.length; ++i) {
 
-                const star = vec3.scale([] as any, stars[i], 200.0);
+                const star = vec3.scale([] as unknown as vec3, stars[i], 200.0);
 
                 const size = Math.max(0, 1.0 + 0.01 * sizeRange * (-0.5 + 1.0 * sRand()));
                 const intensity = Math.max(0, 1.0 + 0.01 * intensityRange * (-0.5 + 1.0 * sRand()));
@@ -139,13 +139,13 @@ class Atmosphere {
 
         const fogLUT = painter.style.getLut(fog.scope);
         const colorIgnoreLut = fog.properties.get('color-use-theme') === 'none';
-        const fogColor = fog.properties.get('color').toRenderColor(colorIgnoreLut ? null : fogLUT).toArray01();
+        const fogColor = fog.properties.get('color').toNonPremultipliedRenderColor(colorIgnoreLut ? null : fogLUT).toArray01();
 
         const hignoreLutIgnoreLut = fog.properties.get('high-color-use-theme') === 'none';
-        const highColor = fog.properties.get('high-color').toRenderColor(hignoreLutIgnoreLut ? null : fogLUT).toArray01();
+        const highColor = fog.properties.get('high-color').toNonPremultipliedRenderColor(hignoreLutIgnoreLut ? null : fogLUT).toArray01();
 
         const spaceColorIgnoreLut = fog.properties.get('space-color-use-theme') === 'none';
-        const spaceColor = fog.properties.get('space-color').toRenderColor(spaceColorIgnoreLut ? null : fogLUT).toArray01PremultipliedAlpha();
+        const spaceColor = fog.properties.get('space-color').toNonPremultipliedRenderColor(spaceColorIgnoreLut ? null : fogLUT).toArray01();
 
         // https://www.desmos.com/calculator/oanvvpr36d
         // Ensure horizon blend is 0-exclusive to prevent division by 0 in the shader
@@ -192,7 +192,6 @@ class Atmosphere {
             const colorMode = alphaPass ? this.colorModeWriteAlpha : this.colorModeAlphaBlendedWriteRGB;
             const name = alphaPass ? "atmosphere_glow_alpha" : "atmosphere_glow";
             if (buffer) {
-                // @ts-expect-error - TS2554 - Expected 12-16 arguments, but got 11.
                 program.draw(painter, gl.TRIANGLES, depthMode, StencilMode.disabled,
                         colorMode, CullFaceMode.backCW, uniforms, name,
                         buffer.vertexBuffer, buffer.indexBuffer, buffer.segments);
@@ -246,7 +245,6 @@ class Atmosphere {
         painter.uploadCommonUniforms(context, program);
 
         if (this.starsVx && this.starsIdx) {
-            // @ts-expect-error - TS2554 - Expected 12-16 arguments, but got 11.
             program.draw(painter, gl.TRIANGLES, DepthMode.disabled, StencilMode.disabled,
                 this.colorModeAlphaBlendedWriteRGB, CullFaceMode.disabled, uniforms, "atmosphere_stars",
                 this.starsVx, this.starsIdx, this.starsSegments);

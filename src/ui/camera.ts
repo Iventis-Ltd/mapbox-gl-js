@@ -29,7 +29,10 @@ import MercatorCoordinate, {
 import {Aabb} from '../util/primitives';
 import {getZoomAdjustment} from '../geo/projection/adjustments';
 
+import type Tile from '../source/tile';
 import type Transform from '../geo/transform';
+import type HandlerManager from './handler_manager';
+import type BoxZoomHandler from './handler/box_zoom';
 import type {TaskID} from '../util/task_queue';
 import type {Callback} from '../types/callback';
 import type {MapEvents} from './events';
@@ -129,7 +132,7 @@ export type FullCameraOptions = CameraOptions & {
  * @see [Example: Slowly fly to a location](https://docs.mapbox.com/mapbox-gl-js/example/flyto-options/)
  * @see [Example: Customize camera animations](https://docs.mapbox.com/mapbox-gl-js/example/camera-animation/)
  * @see [Example: Navigate the map with game-like controls](https://docs.mapbox.com/mapbox-gl-js/example/game-controls/)
-*/
+ */
 export type AnimationOptions = {
     animate?: boolean;
     curve?: number;
@@ -145,6 +148,13 @@ export type AnimationOptions = {
 };
 
 export type EasingOptions = CameraOptions & AnimationOptions;
+
+type MotionState = {
+    moving?: boolean;
+    zooming?: boolean;
+    rotating?: boolean;
+    pitching?: boolean;
+};
 
 export type ElevationBoxRaycast = {
     minLngLat: LngLat;
@@ -202,10 +212,9 @@ class Camera extends Evented<MapEvents> {
     _onEaseEnd: (easeId?: string) => void | null | undefined;
     _easeFrameId: TaskID | null | undefined;
 
-    constructor(transform: Transform, options: {
-        bearingSnap: number;
-        respectPrefersReducedMotion?: boolean;
-    }) {
+    handlers?: HandlerManager;
+
+    constructor(transform: Transform, options: {bearingSnap?: number; respectPrefersReducedMotion?: boolean}) {
         super();
         this._moving = false;
         this._zooming = false;
@@ -218,10 +227,7 @@ class Camera extends Evented<MapEvents> {
         //addAssertions(this);
     }
 
-    /** @section {Camera}
-     * @method
-     * @instance
-     * @memberof Map */
+    /** @section Camera */
 
     /**
      * Returns the map's geographical centerpoint.
@@ -674,9 +680,9 @@ class Camera extends Evented<MapEvents> {
 
         const origin = latLngToECEF(midLat, midLng);
 
-        const zAxis = vec3.normalize([] as any, origin);
-        const xAxis = vec3.normalize([] as any, vec3.cross([] as any, zAxis, [0, 1, 0]));
-        const yAxis = vec3.cross([] as any, xAxis, zAxis);
+        const zAxis = vec3.normalize([] as unknown as vec3, origin);
+        const xAxis = vec3.normalize([] as unknown as vec3, vec3.cross([] as unknown as vec3, zAxis, [0, 1, 0]));
+        const yAxis = vec3.cross([] as unknown as vec3, xAxis, zAxis);
 
         const aabbOrientation: mat4 = [
             xAxis[0], xAxis[1], xAxis[2], 0,
@@ -714,7 +720,7 @@ class Camera extends Evented<MapEvents> {
         const worldToCamera = tr.getWorldToCameraMatrix();
         const cameraToWorld = mat4.invert(new Float64Array(16) as unknown as mat4, worldToCamera);
 
-        aabb = Aabb.applyTransform(aabb, mat4.multiply([] as any, worldToCamera, aabbOrientation));
+        aabb = Aabb.applyTransform(aabb, mat4.multiply([] as unknown as mat4, worldToCamera, aabbOrientation));
         const extendedAabb = this._extendAABB(aabb, tr, eOptions, bearing);
         if (!extendedAabb) {
             warnOnce('Map cannot fit within canvas with the given bounds, padding, and/or offset.');
@@ -727,16 +733,16 @@ class Camera extends Evented<MapEvents> {
         const aabbHalfExtentZ = (aabb.max[2] - aabb.min[2]) * 0.5;
         const frustumDistance = this._minimumAABBFrustumDistance(tr, aabb);
 
-        const offsetZ = vec3.scale([] as any, [0, 0, 1], aabbHalfExtentZ);
+        const offsetZ = vec3.scale([] as unknown as vec3, [0, 0, 1], aabbHalfExtentZ);
         const aabbClosestPoint = vec3.add(offsetZ, center, offsetZ);
         const offsetDistance = frustumDistance + (tr.pitch === 0 ? 0 : vec3.distance(center, aabbClosestPoint));
 
         const globeCenter = tr.globeCenterInViewSpace;
-        const normal = vec3.sub([] as any, center, [globeCenter[0], globeCenter[1], globeCenter[2]]);
+        const normal = vec3.sub([] as unknown as vec3, center, [globeCenter[0], globeCenter[1], globeCenter[2]]);
         vec3.normalize(normal, normal);
         vec3.scale(normal, normal, offsetDistance);
 
-        const cameraPosition = vec3.add([] as any, center, normal);
+        const cameraPosition = vec3.add([] as unknown as vec3, center, normal);
 
         vec3.transformMat4(cameraPosition, cameraPosition, cameraToWorld);
 
@@ -815,7 +821,7 @@ class Camera extends Evented<MapEvents> {
         return extendedAABB;
     }
 
-    /** @section {Querying features} */
+    /** @section Querying features */
 
     /**
      * Queries the currently loaded data for elevation at a geographical location. The elevation is returned in `meters` relative to mean sea-level.
@@ -917,7 +923,7 @@ class Camera extends Evented<MapEvents> {
         }
 
         aabb = extendedAabb;
-        const size = vec3.sub([] as any, aabb.max, aabb.min);
+        const size = vec3.sub([] as unknown as vec3, aabb.max, aabb.min);
         const aabbHalfExtentZ = size[2] * 0.5;
         const frustumDistance = this._minimumAABBFrustumDistance(tr, aabb);
 
@@ -1344,9 +1350,9 @@ class Camera extends Evented<MapEvents> {
 
         const offsetAsPoint = Point.convert(options.offset);
 
-        let pointAtOffset;
-        let from;
-        let delta;
+        let pointAtOffset: Point;
+        let from: Point;
+        let delta: Point;
 
         if (tr.projection.name === 'globe') {
             // Pixel coordinates will be applied directly to translate the globe
@@ -1374,7 +1380,8 @@ class Camera extends Evented<MapEvents> {
         }
         const finalScale = tr.zoomScale(zoom - startZoom);
 
-        let around, aroundPoint;
+        let around: LngLat;
+        let aroundPoint: Point;
 
         if (options.around) {
             around = LngLat.convert(options.around);
@@ -1430,7 +1437,7 @@ class Camera extends Evented<MapEvents> {
             return this;
         }
 
-        const currently = {
+        const currently: MotionState = {
             moving: this._moving,
             zooming: this._zooming,
             rotating: this._rotating,
@@ -1453,7 +1460,7 @@ class Camera extends Evented<MapEvents> {
         return this;
     }
 
-    _prepareEase(eventData: EventData | null | undefined, noMoveStart: boolean, currently: any = {}) {
+    _prepareEase(eventData: EventData | null | undefined, noMoveStart: boolean, currently: MotionState = {}) {
         this._moving = true;
         this.transform.cameraElevationReference = "sea";
         if (this.transform._orthographicProjectionAtLowPitch && this.transform.pitch  === 0 && this.transform.projection.name !== 'globe') {
@@ -1685,8 +1692,8 @@ class Camera extends Evented<MapEvents> {
             const k = w1 < w0 ? -1 : 1;
             S = Math.abs(Math.log(w1 / w0)) / rho;
 
-            u = function() { return 0; };
-            w = function(s) { return Math.exp(k * rho * s); };
+            u = function () { return 0; };
+            w = function (s) { return Math.exp(k * rho * s); };
         }
 
         if ('duration' in options) {
@@ -1792,7 +1799,7 @@ class Camera extends Evented<MapEvents> {
             onEaseEnd.call(this, easeId);
         }
         if (!allowGestures) {
-            const handlers = (this as any).handlers;
+            const handlers = this.handlers;
             if (handlers) handlers.stop(false);
         }
         return this;
@@ -1857,11 +1864,11 @@ class Camera extends Evented<MapEvents> {
     }
 
     // emulates frame function for some transform
-    _emulate(frame: any, duration: number, initialTransform: Transform): Array<Transform> {
+    _emulate(frame: (Transform) => (number) => Transform, duration: number, initialTransform: Transform): Array<Transform> {
         const frameRate = 15;
         const numFrames = Math.ceil(duration * frameRate / 1000);
 
-        const transforms = [];
+        const transforms: Transform[] = [];
         const emulateFrame = frame(initialTransform.clone());
         for (let i = 0; i <= numFrames; i++) {
             const transform = emulateFrame(i / numFrames);
@@ -1872,7 +1879,7 @@ class Camera extends Evented<MapEvents> {
     }
 
     // No-op in the Camera class, implemented by the Map class
-    _preloadTiles(_transform: Transform | Array<Transform>, _callback?: Callback<any>): any {}
+    _preloadTiles(_transform: Transform | Array<Transform>, _callback?: Callback<Tile[]>) {}
 }
 
 // In debug builds, check that camera change events are fired in the correct order.
@@ -1880,7 +1887,7 @@ class Camera extends Evented<MapEvents> {
 // - another ___start event can't be fired before a ___end event has been fired for the previous one
 function addAssertions(camera: Camera) { //eslint-disable-line
     Debug.run(() => {
-        const inProgress: Record<string, any> = {};
+        const inProgress: Record<string, boolean> = {};
 
         (['drag', 'zoom', 'rotate', 'pitch', 'move'] as const).forEach(name => {
             inProgress[name] = false;
@@ -1904,7 +1911,7 @@ function addAssertions(camera: Camera) { //eslint-disable-line
         });
 
         // Canary used to test whether this function is stripped in prod build
-        canary = 'canary debug run'; //eslint-disable-line
+        canary = 'canary debug run';
     });
 }
 

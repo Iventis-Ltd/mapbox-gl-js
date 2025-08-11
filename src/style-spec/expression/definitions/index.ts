@@ -19,11 +19,13 @@ import Literal from './literal';
 import Assertion from './assertion';
 import Coercion from './coercion';
 import At from './at';
+import AtInterpolated from './at_interpolated';
 import In from './in';
 import IndexOf from './index_of';
 import Match from './match';
 import Case from './case';
 import Slice from './slice';
+import Split from './split';
 import Step from './step';
 import Interpolate from './interpolate';
 import Coalesce from './coalesce';
@@ -46,6 +48,7 @@ import Distance from './distance';
 import {mulberry32} from '../../util/random';
 
 import type {Type} from '../types';
+import type {Value} from '../values';
 import type EvaluationContext from '../evaluation_context';
 import type {Varargs} from '../compound_expression';
 import type {Expression, ExpressionRegistry} from '../expression';
@@ -60,6 +63,7 @@ const expressions: ExpressionRegistry = {
     '<=': LessThanOrEqual,
     'array': Assertion,
     'at': At,
+    'at-interpolated': AtInterpolated,
     'boolean': Assertion,
     'case': Case,
     'coalesce': Coalesce,
@@ -88,7 +92,8 @@ const expressions: ExpressionRegistry = {
     'var': Var,
     'within': Within,
     'distance': Distance,
-    'config': Config
+    'config': Config,
+    'split': Split
 };
 
 function rgba(ctx: EvaluationContext, [r, g, b, a]: Expression[]) {
@@ -98,8 +103,7 @@ function rgba(ctx: EvaluationContext, [r, g, b, a]: Expression[]) {
     const alpha = a ? a.evaluate(ctx) : 1;
     const error = validateRGBA(r, g, b, alpha);
     if (error) throw new RuntimeError(error);
-    // @ts-expect-error
-    return new Color(r / 255 * alpha, g / 255 * alpha, b / 255 * alpha, alpha);
+    return new Color(r as unknown as number / 255, g as unknown as number / 255, b as unknown as number / 255, alpha);
 }
 
 function hsla(ctx: EvaluationContext, [h, s, l, a]: Expression[]) {
@@ -116,25 +120,16 @@ function hsla(ctx: EvaluationContext, [h, s, l, a]: Expression[]) {
     return color;
 }
 
-function has(
-    key: string,
-    obj: {
-        [key: string]: any;
-    },
-): boolean {
+function has<T extends object>(key: keyof T, obj: T): boolean {
     return key in obj;
 }
 
-function get(key: string, obj: {
-    [key: string]: any;
-}) {
+function get<T extends object>(key: keyof T, obj: T): T[keyof T] | null {
     const v = obj[key];
     return typeof v === 'undefined' ? null : v;
 }
 
-function binarySearch(v: any, a: {
-    [key: number]: any;
-}, i: number, j: number) {
+function binarySearch(v: unknown, a: Record<number, unknown>, i: number, j: number): boolean {
     while (i <= j) {
         const m = (i + j) >> 1;
         if (a[m] === v)
@@ -179,14 +174,16 @@ CompoundExpression.register(expressions, {
         array(NumberType, 4),
         [ColorType],
         (ctx, [v]) => {
-            return v.evaluate(ctx).toRenderColor(null).toArray();
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+            return v.evaluate(ctx).toNonPremultipliedRenderColor(null).toArray();
         }
     ],
     'to-hsla': [
         array(NumberType, 4),
         [ColorType],
         (ctx, [v]) => {
-            return v.evaluate(ctx).toRenderColor(null).toHslaArray();
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+            return v.evaluate(ctx).toNonPremultipliedRenderColor(null).toHslaArray();
         }
     ],
     'rgb': [
@@ -229,6 +226,7 @@ CompoundExpression.register(expressions, {
                 (ctx, [key]) => get(key.evaluate(ctx), ctx.properties())
             ], [
                 [StringType, ObjectType],
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-return
                 (ctx, [key, obj]) => get(key.evaluate(ctx), obj.evaluate(ctx))
             ]
         ]
@@ -236,17 +234,22 @@ CompoundExpression.register(expressions, {
     'feature-state': [
         ValueType,
         [StringType],
-        (ctx, [key]) => get(key.evaluate(ctx), ctx.featureState || {})
+        (ctx, [key]) => get(key.evaluate(ctx), ctx.featureState || {}) as Value
     ],
     'properties': [
         ObjectType,
         [],
-        (ctx) => ctx.properties()
+        (ctx) => ctx.properties() as Value
     ],
     'geometry-type': [
         StringType,
         [],
         (ctx) => ctx.geometryType()
+    ],
+    'worldview': [
+        StringType,
+        [],
+        (ctx) => ctx.globals.worldview || ""
     ],
     'id': [
         ValueType,
@@ -301,7 +304,7 @@ CompoundExpression.register(expressions, {
     'accumulated': [
         ValueType,
         [],
-        (ctx) => ctx.globals.accumulated === undefined ? null : ctx.globals.accumulated
+        (ctx) => (ctx.globals.accumulated === undefined ? null : ctx.globals.accumulated)
     ],
     '+': [
         NumberType,
@@ -420,11 +423,13 @@ CompoundExpression.register(expressions, {
     'min': [
         NumberType,
         varargs(NumberType),
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         (ctx, args) => Math.min(...args.map(arg => arg.evaluate(ctx)))
     ],
     'max': [
         NumberType,
         varargs(NumberType),
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         (ctx, args) => Math.max(...args.map(arg => arg.evaluate(ctx)))
     ],
     'abs': [
@@ -577,6 +582,7 @@ CompoundExpression.register(expressions, {
         overloads: [
             [
                 [BooleanType, BooleanType],
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-return
                 (ctx, [a, b]) => a.evaluate(ctx) && b.evaluate(ctx)
             ],
             [
@@ -596,6 +602,7 @@ CompoundExpression.register(expressions, {
         overloads: [
             [
                 [BooleanType, BooleanType],
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-return
                 (ctx, [a, b]) => a.evaluate(ctx) || b.evaluate(ctx)
             ],
             [
@@ -630,11 +637,13 @@ CompoundExpression.register(expressions, {
     'upcase': [
         StringType,
         [StringType],
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         (ctx, [s]) => s.evaluate(ctx).toUpperCase()
     ],
     'downcase': [
         StringType,
         [StringType],
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         (ctx, [s]) => s.evaluate(ctx).toLowerCase()
     ],
     'concat': [
@@ -645,17 +654,21 @@ CompoundExpression.register(expressions, {
     'resolved-locale': [
         StringType,
         [CollatorType],
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         (ctx, [collator]) => collator.evaluate(ctx).resolvedLocale()
     ],
     'random': [
         NumberType,
         [NumberType, NumberType, ValueType],
         (ctx, args) => {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-return
             const [min, max, seed] = args.map(arg => arg.evaluate(ctx));
             if (min > max) {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-return
                 return min;
             }
             if (min === max) {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-return
                 return min;
             }
             let seedVal;
@@ -667,6 +680,7 @@ CompoundExpression.register(expressions, {
                 throw new RuntimeError(`Invalid seed input: ${seed}`);
             }
             const random = mulberry32(seedVal)();
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-return
             return min + random * (max - min);
         }
     ],

@@ -1,3 +1,4 @@
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-nocheck
 import {describe, test, expect, waitFor, vi} from '../../util/vitest';
 import {getPNGResponse, mockFetch} from '../../util/network';
@@ -18,7 +19,8 @@ function createSource(options, transformCallback) {
             clearSource: () => {},
             getLut: () => { return null; },
             getBrightness: () => { return 0.0; },
-        }
+        },
+        getWorldview: () => undefined
     });
 
     source.on('error', (e) => {
@@ -78,7 +80,7 @@ describe('RasterTileSource', () => {
 
         const e = await waitFor(source, "data");
         if (e.sourceDataType === 'metadata') {
-            expect(source.tileBounds.bounds).toEqual({_sw:{lng: -47, lat: -7}, _ne:{lng: -45, lat: 90}});
+            expect(source.tileBounds.bounds).toEqual({_sw: {lng: -47, lat: -7}, _ne: {lng: -45, lat: 90}});
         }
     });
 
@@ -122,7 +124,7 @@ describe('RasterTileSource', () => {
             const tile = {
                 tileID: new OverscaledTileID(10, 0, 10, 5, 5),
                 state: 'loading',
-                loadVectorData () {},
+                loadVectorData() {},
                 setExpiryData() {}
             };
 
@@ -168,7 +170,7 @@ describe('RasterTileSource', () => {
             const tile = {
                 tileID: new OverscaledTileID(10, 0, 10, 5, 5),
                 state: 'loading',
-                loadVectorData () {},
+                loadVectorData() {},
                 setExpiryData() {}
             };
 

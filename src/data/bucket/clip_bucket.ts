@@ -24,6 +24,7 @@ import type {Footprint, TileFootprint} from '../../../3d-style/util/conflation';
 import type {VectorTileLayer} from '@mapbox/vector-tile';
 import type {SpritePositions} from '../../util/image';
 import type {TypedStyleLayer} from '../../style/style_layer/typed_style_layer';
+import type {ImageId} from '../../style-spec/expression/types/image_id';
 
 class ClipBucket implements Bucket {
     index: number;
@@ -36,6 +37,8 @@ class ClipBucket implements Bucket {
 
     footprints: Array<Footprint>;
 
+    worldview: string;
+
     constructor(options: BucketParameters<ClipStyleLayer>) {
         this.zoom = options.zoom;
         this.layers = options.layers;
@@ -45,6 +48,8 @@ class ClipBucket implements Bucket {
 
         this.stateDependentLayerIds = this.layers.filter((l) => l.isStateDependent()).map((l) => l.id);
         this.footprints = [];
+
+        this.worldview = options.worldview;
     }
 
     updateFootprints(id: UnwrappedTileID, footprints: Array<TileFootprint>) {
@@ -63,7 +68,7 @@ class ClipBucket implements Bucket {
             const needGeometry = this.layers[0]._featureFilter.needGeometry;
             const evaluationFeature = toEvaluationFeature(feature, needGeometry);
 
-            if (!this.layers[0]._featureFilter.filter(new EvaluationParameters(this.zoom), evaluationFeature, canonical))
+            if (!this.layers[0]._featureFilter.filter(new EvaluationParameters(this.zoom, {worldview: this.worldview}), evaluationFeature, canonical))
                 continue;
 
             const bucketFeature: BucketFeature = {
@@ -99,13 +104,13 @@ class ClipBucket implements Bucket {
     upload(_context: Context) {
     }
 
-    update(_states: FeatureStates, _vtLayer: VectorTileLayer, _availableImages: Array<string>, _imagePositions: SpritePositions, layers: Array<TypedStyleLayer>, isBrightnessChanged: boolean, brightness?: number | null) {
+    update(_states: FeatureStates, _vtLayer: VectorTileLayer, _availableImages: ImageId[], _imagePositions: SpritePositions, _layers: ReadonlyArray<TypedStyleLayer>, _isBrightnessChanged: boolean, _brightness?: number | null) {
     }
 
     destroy() {
     }
 
-    addFeature(feature: BucketFeature, geometry: Array<Array<Point>>, index: number, canonical: CanonicalTileID, imagePositions: SpritePositions, _availableImages: Array<string> = [], _brightness?: number | null) {
+    addFeature(feature: BucketFeature, geometry: Array<Array<Point>>, index: number, canonical: CanonicalTileID, imagePositions: SpritePositions, _availableImages: ImageId[] = [], _brightness?: number | null) {
         for (const polygon of classifyRings(geometry, 2)) {
             const points: Array<Point> = [];
             const flattened = [];
@@ -144,7 +149,7 @@ class ClipBucket implements Bucket {
                 indices,
                 grid,
                 min,
-                max
+                max,
             });
         }
     }

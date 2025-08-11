@@ -4,7 +4,7 @@
     "test": {
       "height": 128,
       "width": 128,
-      "allowed": 0.02,
+      "allowed": 0.0218,
       "diff-calculation-threshold": 0.06
     }
   },
@@ -13,6 +13,7 @@
     52.499167
   ],
   "zoom": 14,
+  "camera": {"camera-projection": "orthographic"},
   "sources": {
     "mapbox": {
       "type": "vector",

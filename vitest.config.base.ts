@@ -2,6 +2,8 @@ import {defineConfig} from 'vitest/config';
 import {createFilter} from '@rollup/pluginutils';
 import arraybuffer from 'vite-plugin-arraybuffer';
 
+const isCI = process.env.CI === 'true';
+
 function glsl(include: string[]) {
     const filter = createFilter(include);
     return {
@@ -17,18 +19,9 @@ function glsl(include: string[]) {
 
 export default defineConfig({
     test: {
-        pool: 'threads',
-        poolOptions: {
-            threads: {
-                isolate: false,
-                useAtomics: true,
-                singleThread: true
-            }
-        },
-        retry: process.env.CI ? 2 : 0,
+        retry: isCI ? 2 : 0,
         testTimeout: 5_000,
         browser: {
-            name: 'chromium',
             provider: 'playwright',
             enabled: true,
             headless: true,

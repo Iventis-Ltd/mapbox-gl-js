@@ -4,12 +4,12 @@ import getType from '../util/get_type';
 
 import type {ValidationOptions} from './validate';
 
-export default function validateFog(options: ValidationOptions): Array<ValidationError> {
+export default function validateFog(options: ValidationOptions): ValidationError[] {
     const fog = options.value;
     const style = options.style;
     const styleSpec = options.styleSpec;
     const fogSpec = styleSpec.fog;
-    let errors = [];
+    let errors: ValidationError[] = [];
 
     const rootType = getType(fog);
     if (fog === undefined) {
@@ -27,7 +27,7 @@ export default function validateFog(options: ValidationOptions): Array<Validatio
             errors = errors.concat(validate({
                 key,
                 value: fog[key],
-                valueSpec: {type:'string'},
+                valueSpec: {type: 'string'},
                 style,
                 styleSpec
             }));

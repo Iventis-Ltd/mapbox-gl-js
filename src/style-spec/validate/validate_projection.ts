@@ -10,7 +10,7 @@ export default function validateProjection(options: ValidationOptions): Array<Va
     const projectionSpec = styleSpec.projection;
     const style = options.style;
 
-    let errors = [];
+    let errors: ValidationError[] = [];
 
     const rootType = getType(projection);
 
