@@ -14,6 +14,7 @@ import {regionsEquals, transformPointToTile, pointInFootprint, skipClipping} fro
 import {LayerTypeMask} from '../../../3d-style/util/conflation';
 import {isValidUrl} from '../../../src/style-spec/validate/validate_model';
 import {type FeatureState} from '../../../src/style-spec/expression/index';
+
 import type ModelStyleLayer from '../../style/style_layer/model_style_layer';
 import type {ReplacementSource, Region} from '../../../3d-style/source/replacement_source';
 import type Point from '@mapbox/point-geometry';
@@ -195,7 +196,7 @@ class ModelBucket implements Bucket {
                 // Zoom 23: 83 units ≈ 110 m
                 // Zoom 24: 42 units ≈ 100 m
                 let padding: number;
-                
+
                 if (this.canonical.z <= 0) {
                     padding = EXTENT / 32;  // 256 units ≈ 1,250 km at z0
                 } else if (this.canonical.z >= 24) {
@@ -212,7 +213,7 @@ class ModelBucket implements Bucket {
                     const ratio = Math.pow(z20Padding / z0Padding, this.canonical.z / 20);
                     padding = z0Padding * ratio;
                 }
-                options.featureIndex.insert(feature, bucketFeature.geometry, index, sourceLayerIndex, this.index, this.instancesPerModel[modelId].instancedDataArray.length, EXTENT / 32);
+                options.featureIndex.insert(feature, bucketFeature.geometry, index, sourceLayerIndex, this.index, this.instancesPerModel[modelId].instancedDataArray.length, padding);
             }
         }
         this.lookup = null;
