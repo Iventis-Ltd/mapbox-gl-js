@@ -185,8 +185,35 @@ class ModelBucket implements Bucket {
                 // Since 3D model geometry extends over footprint or point geometry, it is important
                 // to add some padding to envelope calculated for grid index lookup, in order to
                 // prevent false negatives in FeatureIndex's coarse check.
-                // Envelope padding is a half of featureIndex.grid cell size.
-                options.featureIndex.insert(feature, bucketFeature.geometry, index, sourceLayerIndex, this.index, this.instancesPerModel[modelId].instancedDataArray.length, EXTENT / 32);
+                // Zoom 0: 256 units ≈ 1,250 km radius
+                // Zoom 1: 248 units ≈ 606 km
+                // Zoom 5: 218 units ≈ 33 km
+                // Zoom 10: 192 units ≈ 2.3 km
+                // Zoom 15: 179 units ≈ 545 m
+                // Zoom 20: 167 units ≈ 200 m
+                // Zoom 21: 146 units ≈ 140 m
+                // Zoom 22: 125 units ≈ 120 m
+                // Zoom 23: 83 units ≈ 110 m
+                // Zoom 24: 42 units ≈ 100 m
+                let padding: number;
+
+                if (this.canonical.z <= 0) {
+                    padding = EXTENT / 32;  // 256 units ≈ 1,250 km at z0
+                } else if (this.canonical.z >= 24) {
+                    padding = 42;  // ≈ 100 m at z24
+                } else if (this.canonical.z >= 20) {
+                    // Linear interpolation between z20 and z24
+                    const z20Padding = 167;  // ≈ 200 m at z20
+                    const z24Padding = 42;   // ≈ 100 m at z24
+                    padding = z20Padding - ((this.canonical.z - 20) * (z20Padding - z24Padding) / 4);
+                } else {
+                    // Exponential decay from z0 to z20
+                    const z0Padding = 256;   // 1,250 km at z0
+                    const z20Padding = 167;  // 200 m at z20
+                    const ratio = Math.pow(z20Padding / z0Padding, this.canonical.z / 20);
+                    padding = z0Padding * ratio;
+                }
+                options.featureIndex.insert(feature, bucketFeature.geometry, index, sourceLayerIndex, this.index, this.instancesPerModel[modelId].instancedDataArray.length, padding);
             }
         }
         this.lookup = null;
