@@ -183,7 +183,27 @@ class ModelBucket implements Bucket {
             const modelId = this.addFeature(bucketFeature, bucketFeature.geometry, evaluationFeature);
 
             if (modelId) {
-                options.featureIndex.insert(feature, bucketFeature.geometry, index, sourceLayerIndex, this.index, this.instancesPerModel[modelId].instancedDataArray.length, EXTENT);
+                // Custom padding scale based on requirements:
+                // z0: 1,250 km, z20: 200 m, z24: 100 m
+                let padding: number;
+                
+                if (this.canonical.z <= 0) {
+                    padding = EXTENT / 32;  // 256 units ≈ 1,250 km at z0
+                } else if (this.canonical.z >= 24) {
+                    padding = 42;  // ≈ 100 m at z24
+                } else if (this.canonical.z >= 20) {
+                    // Linear interpolation between z20 and z24
+                    const z20Padding = 167;  // ≈ 200 m at z20
+                    const z24Padding = 42;   // ≈ 100 m at z24
+                    padding = z20Padding - ((this.canonical.z - 20) * (z20Padding - z24Padding) / 4);
+                } else {
+                    // Exponential decay from z0 to z20
+                    const z0Padding = 256;   // 1,250 km at z0
+                    const z20Padding = 167;  // 200 m at z20
+                    const ratio = Math.pow(z20Padding / z0Padding, this.canonical.z / 20);
+                    padding = z0Padding * ratio;
+                }
+                options.featureIndex.insert(feature, bucketFeature.geometry, index, sourceLayerIndex, this.index, this.instancesPerModel[modelId].instancedDataArray.length, padding);
             }
         }
         this.lookup = null;
