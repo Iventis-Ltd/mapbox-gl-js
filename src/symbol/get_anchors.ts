@@ -175,20 +175,13 @@ function getStartAnchor(
     glyphSize: number,
     boxScale: number,
 ): Anchor | null | undefined {
-    const angleWindowSize = getAngleWindowSize(shapedText, glyphSize, boxScale);
-    const labelLength = getShapedLabelLength(shapedText, shapedIcon) * boxScale;
-
     if (line.length < 2) return;
 
     // Use the first point as the anchor
     const a = line[0];
     const b = line[1];
     const angle = b.angleTo(a);
-    const anchor = new Anchor(a.x, a.y, 0, angle, 0);
-
-    if (!angleWindowSize || checkMaxAngle(line, anchor, labelLength, angleWindowSize, maxAngle)) {
-        return anchor;
-    }
+    return new Anchor(a.x, a.y, 0, angle, 0);
 }
 
 function getEndAnchor(
@@ -199,9 +192,6 @@ function getEndAnchor(
     glyphSize: number,
     boxScale: number,
 ): Anchor | null | undefined {
-    const angleWindowSize = getAngleWindowSize(shapedText, glyphSize, boxScale);
-    const labelLength = getShapedLabelLength(shapedText, shapedIcon) * boxScale;
-
     if (line.length < 2) return;
 
     // Use the last point as the anchor
@@ -209,9 +199,5 @@ function getEndAnchor(
     const a = line[lastIndex];
     const b = line[lastIndex - 1];
     const angle = b.angleTo(a);
-    const anchor = new Anchor(a.x, a.y, 0, angle, lastIndex - 1);
-
-    if (!angleWindowSize || checkMaxAngle(line, anchor, labelLength, angleWindowSize, maxAngle)) {
-        return anchor;
-    }
+    return new Anchor(a.x, a.y, 0, angle, lastIndex - 1);
 }
