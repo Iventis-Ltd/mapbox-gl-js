@@ -180,7 +180,7 @@ function getStartAnchor(
     // Use the first point as the anchor
     const a = line[0];
     const b = line[1];
-    const angle = b.angleTo(a);
+    const angle = a.angleTo(b);
     return new Anchor(a.x, a.y, 0, angle, 0);
 }
 
@@ -198,6 +198,6 @@ function getEndAnchor(
     const lastIndex = line.length - 1;
     const a = line[lastIndex];
     const b = line[lastIndex - 1];
-    const angle = b.angleTo(a);
+    const angle = a.angleTo(b);
     return new Anchor(a.x, a.y, 0, angle, lastIndex - 1);
 }
