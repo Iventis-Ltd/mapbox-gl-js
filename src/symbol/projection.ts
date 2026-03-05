@@ -623,7 +623,33 @@ function placeGlyphAlongLine(
         offsetX - lineOffsetX :
         offsetX + lineOffsetX;
 
-    let dir = combinedOffsetX > 0 ? 1 : -1;
+    let dir;
+    if (combinedOffsetX === 0) {
+        // With zero along-line offset, choose direction based on where the anchor lies
+        // on its segment. This handles line boundaries, including single-segment lines
+        // where both `line-start` and `line-end` have `anchorSegment === 0`.
+        const segmentStartIndex = lineStartIndex + anchorSegment;
+        const segmentEndIndex = segmentStartIndex + 1;
+
+        if (segmentStartIndex >= lineStartIndex && segmentEndIndex < lineEndIndex) {
+            const segmentStart = new Point(lineVertexArray.getx(segmentStartIndex), lineVertexArray.gety(segmentStartIndex));
+            const segmentEnd = new Point(lineVertexArray.getx(segmentEndIndex), lineVertexArray.gety(segmentEndIndex));
+            const distToStart = tileAnchorPoint.dist(segmentStart);
+            const distToEnd = tileAnchorPoint.dist(segmentEnd);
+
+            if (Math.abs(distToStart - distToEnd) > 1e-6) {
+                dir = distToStart < distToEnd ? 1 : -1;
+            } else {
+                const lastSegment = lineEndIndex - lineStartIndex - 2;
+                dir = anchorSegment >= lastSegment ? -1 : 1;
+            }
+        } else {
+            const lastSegment = lineEndIndex - lineStartIndex - 2;
+            dir = anchorSegment >= lastSegment ? -1 : 1;
+        }
+    } else {
+        dir = combinedOffsetX > 0 ? 1 : -1;
+    }
 
     let angle = 0;
     if (flip) {
