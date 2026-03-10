@@ -55,6 +55,8 @@ const FlipState = {
 };
 
 const maxTangent = Math.tan(85 * Math.PI / 180);
+const alongLineOffsetEpsilon = 1e-6;
+const alongLineOffsetEpsilonSq = alongLineOffsetEpsilon * alongLineOffsetEpsilon;
 
 /*
  * # Overview of coordinate spaces
@@ -619,38 +621,70 @@ function placeGlyphAlongLine(
     textMaxAngleThreshold: number
 ): null | PlacedGlyph {
 
+    // `combinedOffsetX` is the signed distance to move *along* the line after accounting for
+    // layer-level line offset and optional `flip` handling.
     const combinedOffsetX = flip ?
         offsetX - lineOffsetX :
         offsetX + lineOffsetX;
 
-    let dir;
-    if (combinedOffsetX === 0) {
+    // Default traversal direction: positive offset walks forward through line vertices,
+    // negative offset walks backward.
+    let dir = combinedOffsetX > 0 ? 1 : -1;
+
+    // Segment indices around the anchor point.
+    const segmentStartIndex = lineStartIndex + anchorSegment;
+    const segmentEndIndex = segmentStartIndex + 1;
+    // Last valid segment index relative to this label's line geometry.
+    const lastSegment = lineEndIndex - lineStartIndex - 2;
+    // Treat near-zero values as zero to avoid direction flapping from floating-point noise.
+    const hasZeroAlongLineOffset = Math.abs(combinedOffsetX) < alongLineOffsetEpsilon;
+
+    // Choose a robust traversal direction near endpoints and zero-offset anchors.
+    // This is required because offset sign alone is ambiguous at line boundaries:
+    // endpoint anchors only have valid geometry inward, and near-zero offsets can
+    // otherwise pick unstable directions from floating-point noise.
+    if (segmentStartIndex >= lineStartIndex && segmentEndIndex < lineEndIndex) {
+        const atStart = anchorSegment <= 0;
+        const atEnd = anchorSegment >= lastSegment;
+        // Fast path: avoid endpoint distance checks unless anchor is at a line endpoint
+        // or along-line offset is effectively zero.
+        if (atStart || atEnd || hasZeroAlongLineOffset) {
+            const dxStart = tileAnchorPoint.x - lineVertexArray.getx(segmentStartIndex);
+            const dyStart = tileAnchorPoint.y - lineVertexArray.gety(segmentStartIndex);
+            const dxEnd = tileAnchorPoint.x - lineVertexArray.getx(segmentEndIndex);
+            const dyEnd = tileAnchorPoint.y - lineVertexArray.gety(segmentEndIndex);
+
+            // Squared distances avoid `sqrt` while preserving ordering/comparison semantics.
+            const distToStartSq =
+                dxStart * dxStart +
+                dyStart * dyStart;
+            const distToEndSq =
+                dxEnd * dxEnd +
+                dyEnd * dyEnd;
+
+            // Endpoint anchors should always traverse inward along the line, regardless of offset sign.
+            if (atStart && distToStartSq <= alongLineOffsetEpsilonSq) {
+                dir = 1;
+            } else if (atEnd && distToEndSq <= alongLineOffsetEpsilonSq) {
+                dir = -1;
+            } else if (hasZeroAlongLineOffset) {
+                // With zero along-line offset, choose direction based on where the anchor lies on the segment.
+                // If equidistant, fall back to endpoint-aware default to keep behavior stable.
+                if (Math.abs(distToStartSq - distToEndSq) > alongLineOffsetEpsilonSq) {
+                    dir = distToStartSq < distToEndSq ? 1 : -1;
+                } else {
+                    dir = atEnd ? -1 : 1;
+                }
+            }
+        }
+    } else if (hasZeroAlongLineOffset) {
         // With zero along-line offset, choose direction based on where the anchor lies
         // on its segment. This handles line boundaries, including single-segment lines
-        // where both `line-start` and `line-end` have `anchorSegment === 0`.
-        const segmentStartIndex = lineStartIndex + anchorSegment;
-        const segmentEndIndex = segmentStartIndex + 1;
-
-        if (segmentStartIndex >= lineStartIndex && segmentEndIndex < lineEndIndex) {
-            const segmentStart = new Point(lineVertexArray.getx(segmentStartIndex), lineVertexArray.gety(segmentStartIndex));
-            const segmentEnd = new Point(lineVertexArray.getx(segmentEndIndex), lineVertexArray.gety(segmentEndIndex));
-            const distToStart = tileAnchorPoint.dist(segmentStart);
-            const distToEnd = tileAnchorPoint.dist(segmentEnd);
-
-            if (Math.abs(distToStart - distToEnd) > 1e-6) {
-                dir = distToStart < distToEnd ? 1 : -1;
-            } else {
-                const lastSegment = lineEndIndex - lineStartIndex - 2;
-                dir = anchorSegment >= lastSegment ? -1 : 1;
-            }
-        } else {
-            const lastSegment = lineEndIndex - lineStartIndex - 2;
-            dir = anchorSegment >= lastSegment ? -1 : 1;
-        }
-    } else {
-        dir = combinedOffsetX > 0 ? 1 : -1;
+        // where both `line-start` and `line-end` can have `anchorSegment === 0`.
+        dir = anchorSegment >= lastSegment ? -1 : 1;
     }
 
+    // `flip` is an orientation decision (keep-upright), so reverse traversal and rotate by π.
     let angle = 0;
     if (flip) {
         // The label needs to be flipped to keep text upright.
@@ -659,6 +693,7 @@ function placeGlyphAlongLine(
         angle = Math.PI;
     }
 
+    // Backward traversal requires an additional π so glyphs align with segment tangent.
     if (dir < 0) angle += Math.PI;
 
     let currentIndex = lineStartIndex + anchorSegment + (dir > 0 ? 0 : 1) | 0;
