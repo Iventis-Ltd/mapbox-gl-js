@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mapbox GL JS Line + line-start Symbols</title>
+    <link rel="stylesheet" href="../dist/mapbox-gl.css" />
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+        }
+
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+<div id="map"></div>
+
+<script src="../dist/mapbox-gl-dev.js"></script>
+<script>
+    mapboxgl.accessToken = 'pk.eyJ1Ijoiam9lY3VzZGluIiwiYSI6IjFmMzMzODhmYTQ4ZWM4MmYwZGVlZDMwMTJmMDIyZWQwIn0.8taIUk7YHSD1srUfcacXBA';
+
+    const map = new mapboxgl.Map({
+        container: 'map',
+        style: 'mapbox://styles/mapbox/streets-v12',
+        center: [-122.420679, 37.772537],
+        zoom: 12
+    });
+
+    map.addControl(new mapboxgl.NavigationControl());
+
+    const logRenderedRoadFeatureIds = () => {
+        const features = map.queryRenderedFeatures({layers: ['inline-line-layer']});
+        console.log('Rendered road feature IDs:', features);
+    };
+
+    const clickableRoadFilter = [
+        'all',
+        ['==', ['get', 'class'], 'primary'],
+        ['match', ['get', 'structure'], ['none', 'ford'], true, false],
+        ['==', ['geometry-type'], 'LineString']
+    ];
+    map.showTileBoundaries = true;
+
+    map.on('load', () => {
+        map.addSource('inline-lines', {
+            type: 'geojson',
+            data: {
+                type: 'FeatureCollection',
+                features: [
+                    {
+                        type: 'Feature',
+                        properties: {name: 'Route A (multi-segment NE)'},
+                        geometry: {
+                            type: 'LineString',
+                            coordinates: [
+                                [-122.428, 37.765],
+                                [-122.421, 37.772],
+                                [-122.414, 37.779],
+                                [-122.407, 37.785]
+                            ]
+                        }
+                    },
+                    {
+                        type: 'Feature',
+                        properties: {name: 'Route B (2-point SW)'},
+                        geometry: {
+                            type: 'LineString',
+                            coordinates: [
+                                [-122.421, 37.772],
+                                [-122.428, 37.765]
+
+                            ]
+                        }
+                    },
+                    {
+                        type: 'Feature',
+                        properties: {name: 'Route C (reverse of A)'},
+                        geometry: {
+                            type: 'LineString',
+                            coordinates: [
+                                [-122.407, 37.785],
+                                [-122.414, 37.779],
+                                [-122.421, 37.772],
+                                [-122.428, 37.765]
+                            ]
+                        }
+                    },
+                    {
+                        type: 'Feature',
+                        properties: {name: 'Route D (horizontal E)'},
+                        geometry: {
+                            type: 'LineString',
+                            coordinates: [
+                                [-122.438, 37.768],
+                                [-122.430, 37.768],
+                                [-122.422, 37.768],
+                                [-122.414, 37.768]
+                            ]
+                        }
+                    },
+                    {
+                        type: 'Feature',
+                        properties: {name: 'Route E (horizontal W)'},
+                        geometry: {
+                            type: 'LineString',
+                            coordinates: [
+                                [-122.414, 37.766],
+                                [-122.422, 37.766],
+                                [-122.430, 37.766],
+                                [-122.438, 37.766]
+                            ]
+                        }
+                    },
+                    {
+                        type: 'Feature',
+                        properties: {name: 'Route F (zigzag)'},
+                        geometry: {
+                            type: 'LineString',
+                            coordinates: [
+                                [-122.433, 37.775],
+                                [-122.427, 37.770],
+                                [-122.421, 37.775],
+                                [-122.415, 37.770]
+                            ]
+                        }
+                    },
+                    {
+                        type: 'Feature',
+                        properties: {name: 'Route G (tiny 2-point NE)'},
+                        geometry: {
+                            type: 'LineString',
+                            coordinates: [
+                                [-122.420679, 37.772537],
+                                [-122.420620, 37.772590]
+                            ]
+                        }
+                    },
+                    {
+                        type: 'Feature',
+                        properties: {name: 'Route H (tiny 2-point SW)'},
+                        geometry: {
+                            type: 'LineString',
+                            coordinates: [
+                                [-122.420620, 37.772590],
+                                [-122.420679, 37.772537]
+                            ]
+                        }
+                    },
+                    {
+                        type: 'Feature',
+                        properties: {name: 'Route I (tiny + duplicate vertex)'},
+                        geometry: {
+                            type: 'LineString',
+                            coordinates: [
+                                [-122.418500, 37.772300],
+                                [-122.418500, 37.772300],
+                                [-122.418430, 37.772340],
+                                [-122.418360, 37.772290]
+                            ]
+                        }
+                    },
+                    {
+                        type: 'Feature',
+                        properties: {name: 'Route J (hairpin + sharp turns)'},
+                        geometry: {
+                            type: 'LineString',
+                            coordinates: [
+                                [-122.424600, 37.774100],
+                                [-122.423800, 37.774500],
+                                [-122.423000, 37.774100],
+                                [-122.423900, 37.773700],
+                                [-122.423100, 37.773300],
+                                [-122.422400, 37.773700]
+                            ]
+                        }
+                    }
+                ]
+            }
+        });
+
+        map.addLayer({
+            id: 'inline-line-layer',
+           type: 'line',
+             source: 'composite',
+            "source-layer": 'road',
+            paint: {
+                'line-color': [
+                    'let', 'bucket', ['%', ['floor', ['*', ['coalesce', ['to-number', ['get', 'len']], 0], 100000]], 24],
+                    ['match', ['var', 'bucket'],
+                        0, '#e63946',
+                        1, '#f4a261',
+                        2, '#e9c46a',
+                        3, '#2a9d8f',
+                        4, '#118ab2',
+                        5, '#3a86ff',
+                        6, '#8338ec',
+                        7, '#ff006e',
+                        8, '#06d6a0',
+                        9, '#8ecae6',
+                        10, '#fb8500',
+                        11, '#90be6d',
+                        12, '#ef476f',
+                        13, '#ffd166',
+                        14, '#00bbf9',
+                        15, '#00f5d4',
+                        16, '#f72585',
+                        17, '#b5179e',
+                        18, '#7209b7',
+                        19, '#4361ee',
+                        20, '#4cc9f0',
+                        21, '#80ed99',
+                        22, '#ff9f1c',
+                        '#2ec4b6'
+                    ]
+                ],
+                'line-width': 5,
+                'line-opacity': 0.9
+            },
+                      filter: [
+    "==",
+    [
+        "get",
+        "type"
+    ],
+    "ferry"
+]
+        });
+
+        map.loadImage('https://docs.mapbox.com/mapbox-gl-js/assets/custom_marker.png', (error, image) => {
+            if (error) throw error;
+            if (!image) return;
+
+            map.addImage('custom-marker', image);
+
+            map.addLayer({
+                id: 'line-start-symbols',
+                type: 'symbol',
+                source: 'composite',
+                "source-layer": 'road',
+                layout: {
+                    'symbol-placement': 'line-start',
+                    'icon-image': 'custom-marker',
+                    'icon-size': 0.7,
+                    'icon-allow-overlap': true
+                },
+                filter: [
+    "==",
+    [
+        "get",
+        "type"
+    ],
+    "ferry"
+]
+            });
+        });
+
+        map.once('idle', logRenderedRoadFeatureIds);
+        //map.on('moveend', logRenderedRoadFeatureIds);
+
+        map.on('click', 'inline-line-layer', (e) => {
+            const feature = map.queryRenderedFeatures(e.point, {
+                layers: ['inline-line-layer'],
+                filter: clickableRoadFilter
+            })[0];
+            if (!feature) return;
+
+            console.log('Clicked feature:', {
+                id: feature.id,
+                source: feature.source,
+                sourceLayer: feature.sourceLayer,
+                properties: feature.properties,
+                geometryType: feature.geometry && feature.geometry.type
+            });
+        });
+
+        map.on('mouseenter', 'inline-line-layer', () => {
+            map.getCanvas().style.cursor = 'pointer';
+        });
+
+        map.on('mouseleave', 'inline-line-layer', () => {
+            map.getCanvas().style.cursor = '';
+        });
+    });
+</script>
+</body>
+</html>
