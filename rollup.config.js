@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import {fileURLToPath} from 'url';
 import {readFile} from 'node:fs/promises';
+import {transformSync} from 'esbuild';
+import browserslistToEsbuild from 'browserslist-to-esbuild';
 import {plugins} from './build/rollup_plugins.js';
 import banner from './build/banner.js';
 
@@ -26,6 +28,23 @@ function buildType(build, minified) {
 
 const outputFile = buildType(BUILD, MINIFY);
 
+const bundlePreludeSource = fs.readFileSync(fileURLToPath(new URL('./rollup/bundle_prelude.js', import.meta.url)), 'utf8');
+const bundlePrelude = production ? transformSync(bundlePreludeSource, {target: browserslistToEsbuild(), minify: true}).code : bundlePreludeSource;
+
+function preserveDynamicImport() {
+    return {
+        name: 'preserve-dynamic-import',
+        resolveDynamicImport() {
+            // Prevent Rollup from resolving and code-splitting dynamic imports.
+            // They will be loaded natively at runtime via import().
+            return false;
+        },
+        renderDynamicImport() {
+            return {left: 'import(', right: ')'};
+        }
+    };
+}
+
 export default ({watch}) => {
     return [{
         // First, use code splitting to bundle GL JS into three "chunks":
@@ -46,7 +65,7 @@ export default ({watch}) => {
         },
         onwarn: production ? onwarn : false,
         treeshake: production ? {preset: 'recommended', moduleSideEffects: (id) => !id.endsWith('devtools.ts')} : false,
-        plugins: plugins({minified, production, bench, test: false, keepClassNames: false, mode: BUILD})
+        plugins: [preserveDynamicImport()].concat(plugins({minified, production, bench, test: false, keepClassNames: false, mode: BUILD}))
     }, {
         // Next, bundle together the three "chunks" produced in the previous pass
         // into a single, final bundle. See rollup/bundle_prelude.js and
@@ -58,11 +77,12 @@ export default ({watch}) => {
             format: 'umd',
             sourcemap: production ? true : 'inline',
             indent: false,
-            intro: fs.readFileSync(fileURLToPath(new URL('./rollup/bundle_prelude.js', import.meta.url)), 'utf8'),
+            intro: bundlePrelude,
             banner
         },
         treeshake: false,
         plugins: [
+            preserveDynamicImport(),
             // Ingest the sourcemaps produced in the first step of the build.
             // This is the only reason we use Rollup for this second pass
             // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment

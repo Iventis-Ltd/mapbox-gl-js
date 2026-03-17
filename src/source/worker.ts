@@ -13,6 +13,7 @@ import {Event} from '../util/evented';
 import {getProjection} from '../geo/projection/index';
 import {ImageRasterizer} from '../render/image_rasterizer';
 import {isWorker} from '../util/util';
+import {loadTileProvider} from './tile_provider_worker';
 
 import type Projection from '../geo/projection/projection';
 import type {ImageId} from '../style-spec/expression/types/image_id';
@@ -20,19 +21,10 @@ import type {TaskMetadata} from '../util/scheduler';
 import type {RtlTextPlugin} from './rtl_text_plugin';
 import type {RasterizedImageMap} from '../render/image_manager';
 import type {ActorMessage, ActorMessages} from '../util/actor_messages';
-import type {WorkerSource, WorkerSourceConstructor} from './worker_source';
+import type {WorkerSourceType, WorkerSource, WorkerSourceConstructor, WorkerSourceRequest} from './worker_source';
+import type {TileProvider} from './tile_provider';
 import type {StyleModelMap} from '../style/style_mode';
 import type {Callback} from '../types/callback';
-
-/**
- * Source types that can instantiate a {@link WorkerSource} in {@link MapWorker}.
- */
-type WorkerSourceType =
-    | 'vector'
-    | 'geojson'
-    | 'raster-dem'
-    | 'raster-array'
-    | 'batched-model';
 
 /**
  * Generic type for grouping items by mapId and style scope.
@@ -61,7 +53,9 @@ export default class MapWorker {
     referrer: string | null | undefined;
     dracoUrl: string | null | undefined;
     meshoptUrl: string | null | undefined;
-    brightness: number | undefined;
+    brightness: number | null | undefined;
+    maxUniformBufferBindings: number | null | undefined;
+    maxUniformBlockSizeDwords: number | null | undefined;
     imageRasterizer: ImageRasterizer;
     worldview: string | undefined;
     rtlPluginParsingListeners: Array<Callback<boolean>>;
@@ -214,6 +208,12 @@ export default class MapWorker {
         callback();
     }
 
+    setContextParams(mapId: number, params: ActorMessages['setContextParams']['params'], callback: ActorMessages['setContextParams']['callback']) {
+        this.maxUniformBufferBindings = params.maxBindingPoints;
+        this.maxUniformBlockSizeDwords = params.maxUniformBlockSizeDwords;
+        callback();
+    }
+
     setWorldview(mapId: number, worldview: ActorMessages['setWorldview']['params'], callback: ActorMessages['setWorldview']['callback']) {
         this.worldview = worldview;
         callback();
@@ -232,27 +232,27 @@ export default class MapWorker {
     loadTile(mapId: number, params: ActorMessages['loadTile']['params'], callback: ActorMessages['loadTile']['callback']) {
         assert(params.type);
         params.projection = this.projections[mapId] || this.defaultProjection;
-        this.getWorkerSource(mapId, params.type, params.source, params.scope).loadTile(params, callback);
+        this.getWorkerSource(mapId, params).loadTile(params, callback);
     }
 
     decodeRasterArray(mapId: number, params: ActorMessages['decodeRasterArray']['params'], callback: ActorMessages['decodeRasterArray']['callback']) {
-        (this.getWorkerSource(mapId, params.type, params.source, params.scope) as RasterArrayTileWorkerSource).decodeRasterArray(params, callback);
+        (this.getWorkerSource(mapId, params) as RasterArrayTileWorkerSource).decodeRasterArray(params, callback);
     }
 
     reloadTile(mapId: number, params: ActorMessages['reloadTile']['params'], callback: ActorMessages['reloadTile']['callback']) {
         assert(params.type);
         params.projection = this.projections[mapId] || this.defaultProjection;
-        this.getWorkerSource(mapId, params.type, params.source, params.scope).reloadTile(params, callback);
+        this.getWorkerSource(mapId, params).reloadTile(params, callback);
     }
 
     abortTile(mapId: number, params: ActorMessages['abortTile']['params'], callback: ActorMessages['abortTile']['callback']) {
         assert(params.type);
-        this.getWorkerSource(mapId, params.type, params.source, params.scope).abortTile(params, callback);
+        this.getWorkerSource(mapId, params).abortTile(params, callback);
     }
 
     removeTile(mapId: number, params: ActorMessages['removeTile']['params'], callback: ActorMessages['removeTile']['callback']) {
         assert(params.type);
-        this.getWorkerSource(mapId, params.type, params.source, params.scope).removeTile(params, callback);
+        this.getWorkerSource(mapId, params).removeTile(params, callback);
     }
 
     removeSource(mapId: number, params: ActorMessages['removeSource']['params'], callback: ActorMessages['removeSource']['callback']) {
@@ -275,6 +275,33 @@ export default class MapWorker {
         } else {
             callback();
         }
+    }
+
+    /**
+     * Imports a tile provider module, creates an instance,
+     * pre-creates the WorkerSource, and optionally loads TileJSON.
+     * Called via broadcast from the main thread.
+     * @private
+     */
+    loadTileProvider(mapId: number, params: ActorMessages['loadTileProvider']['params'], callback: ActorMessages['loadTileProvider']['callback']) {
+        loadTileProvider(params.name, params.url)
+            .then((ProviderClass) => {
+                const tileProvider = new ProviderClass(params.options);
+
+                this.getWorkerSource(mapId, {
+                    type: params.type,
+                    source: params.source,
+                    scope: params.scope,
+                } as WorkerSourceRequest, tileProvider);
+
+                if (tileProvider.load && params.request) {
+                    return tileProvider.load({request: params.request});
+                }
+
+                return null;
+            })
+            .then((tileJSON) => callback(null, tileJSON))
+            .catch((err: unknown) => callback(err instanceof Error ? err : new Error(typeof err === 'string' ? err : 'Unknown error')));
     }
 
     /**
@@ -374,7 +401,8 @@ export default class MapWorker {
         return layerIndex;
     }
 
-    getWorkerSource(mapId: number, type: string, source: string, scope: string): WorkerSource {
+    getWorkerSource(mapId: number, params: WorkerSourceRequest, tileProvider?: TileProvider<ArrayBuffer>): WorkerSource {
+        const {type, source, scope} = params;
         const workerSources = this.workerSources;
 
         if (!workerSources[mapId])
@@ -408,9 +436,11 @@ export default class MapWorker {
                 availableImages: this.getAvailableImages(mapId, scope),
                 availableModels: this.getAvailableModels(mapId, scope),
                 isSpriteLoaded: this.isSpriteLoaded[mapId][scope],
-                loadTileData: undefined,
+                tileProvider,
                 brightness: this.brightness,
-                worldview: this.worldview
+                worldview: this.worldview,
+                maxUniformBufferBindings: this.maxUniformBufferBindings,
+                maxUniformBlockSizeDwords: this.maxUniformBlockSizeDwords,
             });
         }
 

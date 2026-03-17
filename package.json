@@ -1,7 +1,7 @@
 {
   "name": "mapbox-gl",
   "description": "A WebGL interactive maps library",
-  "version": "3.19.0",
+  "version": "3.20.0",
   "main": "dist/mapbox-gl.js",
   "style": "dist/mapbox-gl.css",
   "types": "dist/mapbox-gl.d.ts",
@@ -54,7 +54,7 @@
     "@rollup/plugin-node-resolve": "^16.0.1",
     "@rollup/plugin-replace": "^6.0.2",
     "@rollup/plugin-strip": "^3.0.4",
-    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-terser": "^1.0.0",
     "@rollup/plugin-virtual": "^3.0.2",
     "@size-limit/file": "^12.0.0",
     "@tweakpane/core": "^2.0.5",
@@ -72,7 +72,7 @@
     "d3-queue": "^3.0.7",
     "diff": "^8.0.2",
     "dts-bundle-generator": "^9.5.1",
-    "ejs": "^4.0.1",
+    "ejs": "^5.0.1",
     "envify": "^4.1.0",
     "esbuild": "^0.27.1",
     "eslint": "^9.30.1",
@@ -101,7 +101,7 @@
     "serve-static": "^2.2.0",
     "shuffle-seed": "^1.1.6",
     "size-limit": "^12.0.0",
-    "st": "^3.0.2",
+    "http-server": "^14.1.1",
     "stylelint": "^17.0.0",
     "stylelint-config-standard": "^40.0.0",
     "tsx": "^4.20.3",
@@ -131,8 +131,7 @@
     "build-dts": "dts-bundle-generator --no-banner --export-referenced-types=false --umd-module-name=mapboxgl -o ./dist/mapbox-gl.d.ts ./src/index.ts",
     "watch-css": "postcss --watch -o dist/mapbox-gl.css src/css/mapbox-gl.css",
     "build-token": "node build/generate-access-token-script.js",
-    "start-server": "st --no-cache -H 0.0.0.0 --port 9966 --index index.html .",
-    "start-range-server": "node build/range-request-server.js",
+    "start-server": "http-server . -a 0.0.0.0 --port 9966 -c-1 -s",
     "start": "run-p build-token watch-css watch-dev start-server",
     "start-esm": "run-p build-token watch-css watch-esm start-server",
     "start-debug": "run-p build-token watch-css watch-dev start-server",
@@ -174,6 +173,7 @@
     "check-ts-suppressions": "tsx build/check-ts-suppressions.ts",
     "codegen": "tsx ./build/generate-style-code.ts && tsx ./build/generate-struct-arrays.ts && tsx ./build/generate-typed-style-spec.ts",
     "tsc": "tsc --project tsconfig.json",
+    "tsc:strict": "tsc -p tsconfig.strictNullChecks.json",
     "publish-alpha": "./build/publish_alpha.sh"
   },
   "files": [
@@ -185,12 +185,12 @@
   ],
   "size-limit": [
     {
-      "limit": "460 kb",
+      "limit": "465 kb",
       "gzip": true,
       "path": "dist/mapbox-gl.js"
     },
     {
-      "limit": "460 kb",
+      "limit": "465 kb",
       "gzip": true,
       "path": [
         "dist/esm-min/mapbox-gl.js",

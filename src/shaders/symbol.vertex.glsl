@@ -98,6 +98,239 @@ out highp vec4 v_pos_light_view_1;
 out highp float v_depth;
 #endif
 
+#ifdef USE_PAINT_PROPERTIES_UBO
+/// UBO-based paint property declarations.
+
+/// Maximum size of UBO (uniform buffer object).
+///
+/// Specs guarantees a minimum of 16KB, but some devices support larger UBOs,
+/// and this value can be set at runtime based on device capabilities.
+#ifndef MAX_UBO_SIZE_VEC4
+#define MAX_UBO_SIZE_VEC4 1024u
+#endif
+
+/// Symbol paint properties header size (in vec4 units).
+///
+/// Header size is determined by the number of properties and the information we need to
+/// store for each property.
+#define SPP_HEADER_SIZE_VEC4 3u
+
+#define DWORDS_PER_VEC4 4u
+
+/// Paint properties for a symbol layer.
+struct SymbolPaintProperties {
+    /// Non-premultiplied render fill color.
+    vec4 fill_np_color;
+    /// Non-premultiplied render halo color.
+    vec4 halo_np_color;
+    float opacity;
+    float halo_width;
+    float halo_blur;
+    float emissive_strength;
+    float occlusion_opacity;
+    float z_offset;
+};
+
+struct PropertyType {
+    /// Whether the property is data-driven and has value in data-driven block or constant uniform.
+    bool isDataDriven;
+     /// Whether the property is zoom-dependent and has two values that need to be interpolated between zooms.
+    bool isZoomDependent;
+    /// Local offset within the data-driven block (in dwords).
+    ///
+    /// Offset should be aligned to the property size:
+    /// - vec2 for encoded color
+    /// - vec4 for two packed colors (used for zoom-dependent color properties)
+    /// - float for float properties
+    /// - vec2 for two floats properties (used for zoom-dependent float properties)
+    uint offsetDwords;
+};
+
+struct SymbolPropertyHeader {
+    /// Size of a data-driven block (in vec4 units).
+    ///
+    /// Size of the data-driven block should be aligned to vec4.
+    uint dataDrivenBlockSizeVec4;
+    /// Property types and aligned block offsets for each property.
+    PropertyType fill_np_color;
+    PropertyType halo_np_color;
+    PropertyType opacity;
+    PropertyType halo_width;
+    PropertyType halo_blur;
+    PropertyType emissive_strength;
+    PropertyType occlusion_opacity;
+    PropertyType z_offset;
+};
+
+/// Zoom interpolation factor for zoom-dependent paint properties.
+uniform float u_zoom;
+
+/// Constant paint properties values shared for all features.
+///
+/// Note: "spp" prefix (Symbol Paint Properties) is needed to avoid name conflicts
+/// with pragma-based paint property declarations.
+uniform lowp vec4 u_spp_fill_np_color;
+uniform lowp vec4 u_spp_halo_np_color;
+uniform lowp float u_spp_opacity;
+uniform lowp float u_spp_halo_width;
+uniform lowp float u_spp_halo_blur;
+uniform lowp float u_spp_emissive_strength;
+uniform lowp float u_spp_occlusion_opacity;
+uniform lowp float u_spp_z_offset;
+
+/// Per-feature index used to look up the feature's data-driven paint property block in
+/// the u_properties uniform buffer.
+in float a_feature_index;
+
+layout(std140) uniform SymbolPaintPropertiesHeaderUniform {
+    /// Header contains information about the following:
+    /// - Mask for which properties are data-driven (32-bit bitmask, 1 bit per property)
+    /// - Mask for which properties are zoom-dependent (32-bit bitmask, 1 bit per property)
+    /// - Size of a data-driven single block
+    /// - Offsets for each property in a data-driven block
+    uvec4 header[SPP_HEADER_SIZE_VEC4];
+} u_spp_header;
+
+layout(std140) uniform SymbolPaintPropertiesUniform {
+    /// Buffer contains vec4 aligned data-driven blocks (a single block per feature,
+    /// multiple blocks for multiple features).
+    vec4 properties[MAX_UBO_SIZE_VEC4];
+} u_spp_properties;
+
+layout(std140) uniform SymbolPaintPropertiesIndexUniform {
+    /// Maps each feature index to its corresponding data-driven block index within
+    /// the u_properties uniform buffer.
+    uvec4 block_indices[MAX_UBO_SIZE_VEC4];
+} u_spp_index;
+
+/// Symbol paint properties need to be interpolated and passed to the fragment shader.
+out lowp float opacity;
+#ifdef RENDER_SDF
+out lowp vec4 fill_np_color;
+out lowp vec4 halo_np_color;
+out lowp float halo_width;
+out lowp float halo_blur;
+#endif
+#ifdef LIGHTING_3D_MODE
+out lowp float emissive_strength;
+#endif
+
+PropertyType getPropertyType(uint propertyIndex, uint dataDrivenMask, uint zoomDependentMask, uint offsetDwords) {
+    PropertyType type;
+    type.isDataDriven = (dataDrivenMask & (1u << propertyIndex)) != 0u;
+    type.isZoomDependent = (zoomDependentMask & (1u << propertyIndex)) != 0u;
+    type.offsetDwords = offsetDwords;
+    return type;
+}
+
+SymbolPropertyHeader readSymbolPropertiesHeader() {
+    SymbolPropertyHeader header;
+    // Read masks:
+    uint dataDrivenMask = u_spp_header.header[0][0];
+    uint zoomDependentMask = u_spp_header.header[0][1];
+    // Read block sizes:
+    header.dataDrivenBlockSizeVec4 = u_spp_header.header[0][2];
+    // Read property types and block offsets:
+    header.fill_np_color        = getPropertyType(0u, dataDrivenMask, zoomDependentMask, u_spp_header.header[0][3]);
+    header.halo_np_color        = getPropertyType(1u, dataDrivenMask, zoomDependentMask, u_spp_header.header[1][0]);
+    header.opacity              = getPropertyType(2u, dataDrivenMask, zoomDependentMask, u_spp_header.header[1][1]);
+    header.halo_width           = getPropertyType(3u, dataDrivenMask, zoomDependentMask, u_spp_header.header[1][2]);
+    header.halo_blur            = getPropertyType(4u, dataDrivenMask, zoomDependentMask, u_spp_header.header[1][3]);
+    header.emissive_strength    = getPropertyType(5u, dataDrivenMask, zoomDependentMask, u_spp_header.header[2][0]);
+    header.occlusion_opacity    = getPropertyType(6u, dataDrivenMask, zoomDependentMask, u_spp_header.header[2][1]);
+    header.z_offset             = getPropertyType(7u, dataDrivenMask, zoomDependentMask, u_spp_header.header[2][2]);
+    return header;
+}
+
+/// Returns the component of a uvec4 at the given index.
+///
+/// Implemented with explicit swizzles to avoid old Adreno driver bugs with
+/// dynamic vector component indexing.
+uint uvec4At(uvec4 v, uint index) {
+    return (index == 0u) ? v.x :
+           (index == 1u) ? v.y :
+           (index == 2u) ? v.z : v.w;
+}
+
+/// Returns the component of a vec4 at the given index.
+///
+/// Implemented with explicit swizzles to avoid old Adreno driver bugs with
+/// dynamic vector component indexing.
+float vec4At(vec4 v, uint index) {
+    return (index == 0u) ? v.x :
+           (index == 1u) ? v.y :
+           (index == 2u) ? v.z : v.w;
+}
+
+vec4 readVec4(uint baseOffsetVec4, uint propertyOffsetDwords) {
+    return u_spp_properties.properties[baseOffsetVec4 + propertyOffsetDwords / DWORDS_PER_VEC4];
+}
+
+float readFloat(vec4 slot, uint propertyOffsetDwords) {
+    return slot[propertyOffsetDwords % DWORDS_PER_VEC4];
+}
+
+uint readUint(uvec4 slot, uint offset) {
+    return slot[offset % DWORDS_PER_VEC4];
+}
+
+vec2 readVec2(vec4 slot, uint propertyOffsetDwords) {
+    float x = vec4At(slot, propertyOffsetDwords % DWORDS_PER_VEC4);
+    float y = vec4At(slot, propertyOffsetDwords % DWORDS_PER_VEC4 + 1u);
+    return vec2(x, y);
+}
+
+/// Calculate the feature's data-driven block offset in u_properties uniform buffer (vec4-indexed).
+uint getDataDrivenBlockOffsetVec4(uint dataDrivenBlockSizeVec4) {
+    uint featureIndex = uint(a_feature_index);
+    uvec4 slot = u_spp_index.block_indices[featureIndex / DWORDS_PER_VEC4];
+    uint blockIndex = uvec4At(slot, featureIndex % DWORDS_PER_VEC4);
+    return blockIndex * dataDrivenBlockSizeVec4;
+}
+
+vec4 readColorProperty(PropertyType propertyType, uint dataDrivenBlockSizeVec4) {
+    uint blockOffsetVec4 = getDataDrivenBlockOffsetVec4(dataDrivenBlockSizeVec4);
+    vec4 color = readVec4(blockOffsetVec4, propertyType.offsetDwords);
+    if (propertyType.isZoomDependent) {
+        color = unpack_mix_color(color, u_zoom);
+    } else {
+        vec2 packedColor = readVec2(color, propertyType.offsetDwords);
+        color = decode_color(packedColor);
+    }
+    return color;
+}
+
+float readFloatProperty(PropertyType propertyType, uint dataDrivenBlockSizeVec4) {
+    uint blockOffsetVec4 = getDataDrivenBlockOffsetVec4(dataDrivenBlockSizeVec4);
+    vec4 slot = readVec4(blockOffsetVec4, propertyType.offsetDwords);
+    float value;
+    if (propertyType.isZoomDependent) {
+        vec2 packedValues = readVec2(slot, propertyType.offsetDwords);
+        value = unpack_mix_vec2(packedValues, u_zoom);
+    } else {
+        value = readFloat(slot, propertyType.offsetDwords);
+    }
+    return value;
+}
+
+SymbolPaintProperties readSymbolPaintProperties() {
+    SymbolPropertyHeader header = readSymbolPropertiesHeader();
+    uint sizeVec4 = header.dataDrivenBlockSizeVec4;
+    SymbolPaintProperties props;
+    props.fill_np_color        = header.fill_np_color.isDataDriven     ? readColorProperty(header.fill_np_color, sizeVec4)     : u_spp_fill_np_color;
+    props.halo_np_color        = header.halo_np_color.isDataDriven     ? readColorProperty(header.halo_np_color, sizeVec4)     : u_spp_halo_np_color;
+    props.opacity              = header.opacity.isDataDriven           ? readFloatProperty(header.opacity, sizeVec4)           : u_spp_opacity;
+    props.halo_width           = header.halo_width.isDataDriven        ? readFloatProperty(header.halo_width, sizeVec4)        : u_spp_halo_width;
+    props.halo_blur            = header.halo_blur.isDataDriven         ? readFloatProperty(header.halo_blur, sizeVec4)         : u_spp_halo_blur;
+    props.emissive_strength    = header.emissive_strength.isDataDriven ? readFloatProperty(header.emissive_strength, sizeVec4) : u_spp_emissive_strength;
+    props.occlusion_opacity    = header.occlusion_opacity.isDataDriven ? readFloatProperty(header.occlusion_opacity, sizeVec4) : u_spp_occlusion_opacity;
+    props.z_offset             = header.z_offset.isDataDriven          ? readFloatProperty(header.z_offset, sizeVec4)          : u_spp_z_offset;
+    return props;
+}
+
+#else 
+/// Pragma-based paint property declarations.
+
 #pragma mapbox: define highp vec4 fill_color
 #pragma mapbox: define highp vec4 halo_color
 #pragma mapbox: define lowp float opacity
@@ -107,7 +340,30 @@ out highp float v_depth;
 #pragma mapbox: define lowp float occlusion_opacity
 #pragma mapbox: define lowp float z_offset
 
+#endif // USE_PAINT_PROPERTIES_UBO
+
 void main() {
+
+#ifdef USE_PAINT_PROPERTIES_UBO
+    /// UBO-based paint property initializations.
+
+    SymbolPaintProperties paint_properties = readSymbolPaintProperties();
+    opacity = paint_properties.opacity;
+#ifdef RENDER_SDF
+    fill_np_color = paint_properties.fill_np_color;
+    halo_np_color = paint_properties.halo_np_color;
+    halo_width = paint_properties.halo_width;
+    halo_blur = paint_properties.halo_blur;
+#endif
+#ifdef LIGHTING_3D_MODE
+    emissive_strength = paint_properties.emissive_strength;
+#endif
+    lowp float occlusion_opacity = paint_properties.occlusion_opacity;
+    lowp float z_offset = paint_properties.z_offset;
+
+#else
+    /// Pragma-based paint property initializations.
+
     #pragma mapbox: initialize highp vec4 fill_color
     #pragma mapbox: initialize highp vec4 halo_color
     #pragma mapbox: initialize lowp float opacity
@@ -116,6 +372,8 @@ void main() {
     #pragma mapbox: initialize lowp float emissive_strength
     #pragma mapbox: initialize lowp float occlusion_opacity
     #pragma mapbox: initialize lowp float z_offset
+
+#endif // USE_PAINT_PROPERTIES_UBO
 
     vec2 a_pos = a_pos_offset.xy;
     vec2 a_offset = a_pos_offset.zw;

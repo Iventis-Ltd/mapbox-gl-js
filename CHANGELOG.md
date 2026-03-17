@@ -1,3 +1,20 @@
+## 3.20.0
+
+### Features and improvements ✨
+
+- Improve memory efficiency by sharing image resources for symbol layers across map tiles.
+
+### Bug fixes 🐞
+
+- Fix icons disappearing when changing the color theme.
+- Fix display of symbols added via the Appearances runtime API.
+
+## 3.19.1
+
+### Bug fixes 🐞
+
+- Removed the unused `@types/mapbox__point-geometry` package that was causing some Typescript builds to fail.
+
 ## 3.19.0
 
 ### Features and improvements ✨
