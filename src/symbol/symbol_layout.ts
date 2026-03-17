@@ -973,6 +973,15 @@ function addFeature(bucket: SymbolBucket,
 
     const defaultShaping = getDefaultHorizontalShaping(shapedTextOrientations.horizontal) || shapedTextOrientations.vertical;
 
+    // For line-start/line-end placement, shift textOffset along the line so that
+    // all glyph offsets end up with the same sign (all positive for line-start,
+    // all negative for line-end). Centered text has glyph offsets ranging from
+    // negative to positive, but endpoint anchors can only traverse inward.
+    if (defaultShaping && (symbolPlacement === 'line-start' || symbolPlacement === 'line-end')) {
+        const shift = symbolPlacement === 'line-start' ? -defaultShaping.left : -defaultShaping.right;
+        textOffset = [textOffset[0] + shift, textOffset[1]];
+    }
+
     // Store text shaping data for icon-text-fit and text appearance updates
     const hasTextAppearances = bucket.hasAnyAppearanceProperty(['text-size', 'text-offset', 'text-rotate']);
     if ((iconTextFit !== 'none' || hasTextAppearances) && bucket.appearanceFeatureData && bucket.featureToAppearanceIndex[feature.index] < bucket.appearanceFeatureData.length) {

@@ -55,8 +55,6 @@ const FlipState = {
 };
 
 const maxTangent = Math.tan(85 * Math.PI / 180);
-const alongLineOffsetEpsilon = 1e-6;
-const alongLineOffsetEpsilonSq = alongLineOffsetEpsilon * alongLineOffsetEpsilon;
 
 /*
  * # Overview of coordinate spaces
@@ -599,6 +597,51 @@ function projectTruncatedLineSegment(
     return vec3.scaleAndAdd(projectedUnit, previousProjectedPoint, projectedUnit, minimumLength) as [number, number, number];
 }
 
+function projectSegment(
+    startIdx: number,
+    endIdx: number,
+    lineEndIndex: number,
+    lineVertexArray: SymbolLineVertexArray,
+    tileID: CanonicalTileID,
+    labelPlaneMatrix: mat4,
+    projection: Projection,
+    elevationParams: ElevationParams | null,
+): {projStart: vec4; projEnd: vec4; tileStart: Point; tileEnd: Point} | null {
+    if (endIdx >= lineEndIndex) return null;
+    const tileStart = new Point(lineVertexArray.getx(startIdx), lineVertexArray.gety(startIdx));
+    const tileEnd = new Point(lineVertexArray.getx(endIdx), lineVertexArray.gety(endIdx));
+    const projStart = elevatePointAndProject(tileStart, tileID, labelPlaneMatrix, projection, elevationParams);
+    const projEnd = elevatePointAndProject(tileEnd, tileID, labelPlaneMatrix, projection, elevationParams);
+    if (projStart[3] <= 0 || projEnd[3] <= 0) return null;
+    return {projStart, projEnd, tileStart, tileEnd};
+}
+
+function computeSegmentAngle(
+    projStart: vec3,
+    projEnd: vec3,
+    baseAngle: number,
+    pitchWithMap: boolean,
+    projection: Projection,
+    tileID: CanonicalTileID,
+    tilePoint: Point,
+): number {
+    const tangent = vec3.sub([], projEnd, projStart);
+    let diffX = tangent[0];
+    let diffY = tangent[1];
+    if (pitchWithMap) {
+        const axisZ = projection.upVector(tileID, tilePoint.x, tilePoint.y);
+        if (axisZ[0] !== 0 || axisZ[1] !== 0 || axisZ[2] !== 1) {
+            const axisX: [number, number, number] = [axisZ[2], 0, -axisZ[0]];
+            const axisY = vec3.cross([], axisZ, axisX);
+            vec3.normalize(axisX, axisX);
+            vec3.normalize(axisY, axisY);
+            diffX = vec3.dot(tangent, axisX);
+            diffY = vec3.dot(tangent, axisY);
+        }
+    }
+    return baseAngle + Math.atan2(diffY, diffX);
+}
+
 function placeGlyphAlongLine(
     offsetX: number,
     lineOffsetX: number,
@@ -621,70 +664,12 @@ function placeGlyphAlongLine(
     textMaxAngleThreshold: number
 ): null | PlacedGlyph {
 
-    // `combinedOffsetX` is the signed distance to move *along* the line after accounting for
-    // layer-level line offset and optional `flip` handling.
     const combinedOffsetX = flip ?
         offsetX - lineOffsetX :
         offsetX + lineOffsetX;
 
-    // Default traversal direction: positive offset walks forward through line vertices,
-    // negative offset walks backward.
     let dir = combinedOffsetX > 0 ? 1 : -1;
 
-    // Segment indices around the anchor point.
-    const segmentStartIndex = lineStartIndex + anchorSegment;
-    const segmentEndIndex = segmentStartIndex + 1;
-    // Last valid segment index relative to this label's line geometry.
-    const lastSegment = lineEndIndex - lineStartIndex - 2;
-    // Treat near-zero values as zero to avoid direction flapping from floating-point noise.
-    const hasZeroAlongLineOffset = Math.abs(combinedOffsetX) < alongLineOffsetEpsilon;
-
-    // Choose a robust traversal direction near endpoints and zero-offset anchors.
-    // This is required because offset sign alone is ambiguous at line boundaries:
-    // endpoint anchors only have valid geometry inward, and near-zero offsets can
-    // otherwise pick unstable directions from floating-point noise.
-    if (segmentStartIndex >= lineStartIndex && segmentEndIndex < lineEndIndex) {
-        const atStart = anchorSegment <= 0;
-        const atEnd = anchorSegment >= lastSegment;
-        // Fast path: avoid endpoint distance checks unless anchor is at a line endpoint
-        // or along-line offset is effectively zero.
-        if (atStart || atEnd || hasZeroAlongLineOffset) {
-            const dxStart = tileAnchorPoint.x - lineVertexArray.getx(segmentStartIndex);
-            const dyStart = tileAnchorPoint.y - lineVertexArray.gety(segmentStartIndex);
-            const dxEnd = tileAnchorPoint.x - lineVertexArray.getx(segmentEndIndex);
-            const dyEnd = tileAnchorPoint.y - lineVertexArray.gety(segmentEndIndex);
-
-            // Squared distances avoid `sqrt` while preserving ordering/comparison semantics.
-            const distToStartSq =
-                dxStart * dxStart +
-                dyStart * dyStart;
-            const distToEndSq =
-                dxEnd * dxEnd +
-                dyEnd * dyEnd;
-
-            // Endpoint anchors should always traverse inward along the line, regardless of offset sign.
-            if (atStart && distToStartSq <= alongLineOffsetEpsilonSq) {
-                dir = 1;
-            } else if (atEnd && distToEndSq <= alongLineOffsetEpsilonSq) {
-                dir = -1;
-            } else if (hasZeroAlongLineOffset) {
-                // With zero along-line offset, choose direction based on where the anchor lies on the segment.
-                // If equidistant, fall back to endpoint-aware default to keep behavior stable.
-                if (Math.abs(distToStartSq - distToEndSq) > alongLineOffsetEpsilonSq) {
-                    dir = distToStartSq < distToEndSq ? 1 : -1;
-                } else {
-                    dir = atEnd ? -1 : 1;
-                }
-            }
-        }
-    } else if (hasZeroAlongLineOffset) {
-        // With zero along-line offset, choose direction based on where the anchor lies
-        // on its segment. This handles line boundaries, including single-segment lines
-        // where both `line-start` and `line-end` can have `anchorSegment === 0`.
-        dir = anchorSegment >= lastSegment ? -1 : 1;
-    }
-
-    // `flip` is an orientation decision (keep-upright), so reverse traversal and rotate by π.
     let angle = 0;
     if (flip) {
         // The label needs to be flipped to keep text upright.
@@ -693,15 +678,38 @@ function placeGlyphAlongLine(
         angle = Math.PI;
     }
 
-    // Backward traversal requires an additional π so glyphs align with segment tangent.
     if (dir < 0) angle += Math.PI;
+
+    const absOffsetX = Math.abs(combinedOffsetX);
+
+    // Zero offset (e.g. icon at a line endpoint): place at the anchor using
+    // the segment tangent for rotation. Bypass traversal which would fail when
+    // `dir` defaults to -1 (since 0 > 0 is false) and walks off the line.
+    if (absOffsetX === 0) {
+        const flipAngle = flip ? Math.PI : 0;
+        const up: [number, number, number] = pitchWithMap ?
+            reprojection.upVector(tileID.canonical, tileAnchorPoint.x, tileAnchorPoint.y) : [0, 0, 1];
+        const seg = projectSegment(
+            lineStartIndex + anchorSegment, lineStartIndex + anchorSegment + 1,
+            lineEndIndex, lineVertexArray, tileID.canonical, labelPlaneMatrix, reprojection, elevationParams);
+
+        return {
+            point: anchorPoint as unknown as vec3,
+            angle: seg ?
+                computeSegmentAngle(seg.projStart as unknown as vec3, seg.projEnd as unknown as vec3,
+                    flipAngle, pitchWithMap, reprojection, tileID.canonical, tileAnchorPoint) :
+                flipAngle,
+            path: [anchorPoint],
+            tilePath: returnPathInTileCoords ? [tileAnchorPoint] : [],
+            up
+        };
+    }
 
     let currentIndex = lineStartIndex + anchorSegment + (dir > 0 ? 0 : 1) | 0;
     let current = anchorPoint;
     let prev = anchorPoint;
     let distanceToPrev = 0;
     let currentSegmentDistance = 0;
-    const absOffsetX = Math.abs(combinedOffsetX);
     const pathVertices = [];
     const tilePath = [];
     let currentVertex = tileAnchorPoint;
@@ -716,8 +724,55 @@ function placeGlyphAlongLine(
         currentIndex += dir;
 
         // offset does not fit on the projected line
-        if (currentIndex < lineStartIndex || currentIndex >= lineEndIndex)
+        if (currentIndex < lineStartIndex || currentIndex >= lineEndIndex) {
+            // At a line endpoint with outward offset before any real traversal:
+            // extrapolate along the anchor segment tangent instead of giving up.
+            if (distanceToPrev === 0 && currentSegmentDistance === 0) {
+                const seg = projectSegment(
+                    lineStartIndex + anchorSegment, lineStartIndex + anchorSegment + 1,
+                    lineEndIndex, lineVertexArray, tileID.canonical, labelPlaneMatrix, reprojection, elevationParams);
+                if (seg) {
+                    const tangent = vec3.sub([], seg.projEnd as unknown as vec3, seg.projStart as unknown as vec3);
+                    const len = vec3.length(tangent);
+                    if (len > 0) {
+                        vec3.normalize(tangent, tangent);
+                        const point = vec3.scaleAndAdd([], anchorPoint, tangent, dir * absOffsetX);
+
+                        const tileTangent = seg.tileEnd.sub(seg.tileStart);
+                        const tileLen = tileTangent.mag();
+                        const tilePoint = tileLen > 0 ?
+                            tileAnchorPoint.add(tileTangent._unit()._mult(dir * absOffsetX * tileLen / len)) :
+                            tileAnchorPoint;
+
+                        const dirTangent = vec3.scale([], tangent, dir);
+                        let axisZ: [number, number, number] = [0, 0, 1];
+                        if (pitchWithMap) {
+                            axisZ = reprojection.upVector(tileID.canonical, tilePoint.x, tilePoint.y);
+                        }
+
+                        if (lineOffsetY) {
+                            const offsetDir = vec3.cross([], axisZ, dirTangent);
+                            vec3.normalize(offsetDir, offsetDir);
+                            vec3.scaleAndAdd(point, point, offsetDir, lineOffsetY * dir);
+                        }
+
+                        pathVertices.push(point);
+                        if (returnPathInTileCoords) tilePath.push(tilePoint);
+                        return {
+                            point,
+                            angle: computeSegmentAngle([0, 0, 0], dirTangent, angle,
+                                pitchWithMap, reprojection, tileID.canonical, tilePoint),
+                            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                            path: pathVertices,
+                            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                            tilePath,
+                            up: axisZ
+                        };
+                    }
+                }
+            }
             return null;
+        }
 
         prev = current;
         prevVertex = currentVertex;
