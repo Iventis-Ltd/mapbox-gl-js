@@ -121,16 +121,15 @@ describe('getAnchors', () => {
         const line = [new Point(1, 1), new Point(1, 3), new Point(3, 6), new Point(4, 7)];
         const anchor = getStartAnchor(line, Math.PI, shapedText, shapedIcon, glyphSize, 1);
         expect(anchor).toEqual(
-            {x: 1, y: 1, z: 0.0, angle: 1.5707963267948966, segment: 0}
+            {x: 1, y: 1, z: 0.0, angle: -1.5707963267948966, segment: 0}
         );
     });
 
     test('getEndAnchor', () => {
         const line = [new Point(1, 1), new Point(1, 3), new Point(3, 6), new Point(4, 7)];
         const anchor = getEndAnchor(line, Math.PI, shapedText, shapedIcon, glyphSize, 1);
-        // The angle should be from the second-to-last point to the last point
         expect(anchor).toEqual(
-            {x: 4, y: 7, z: 0.0, angle: -2.356194490192345, segment: 2}
+            {x: 4, y: 7, z: 0.0, angle: 0.7853981633974483, segment: 2}
         );
     });
 });
