@@ -694,6 +694,194 @@ function projectLinePoint(
     return projectTruncatedLineSegment(previousTilePoint, tilePoint, previousProjectedPoint, truncationLength, labelPlaneMatrix, elevationParams, projection, tileID, blend);
 }
 
+/**
+ * Projects both end vertices of a line segment to the label plane.
+ *
+ * Unlike `projectLinePoint`, this neither reads nor writes the projection cache and never truncates
+ * a segment that crosses the camera plane. It is used where the direction of the anchor's own
+ * segment is needed, for zero-offset glyphs and for glyphs extrapolated past the end of a line.
+ *
+ * @param startIdx Index of the segment's first vertex in `lineVertexArray`.
+ * @param endIdx Index of the segment's second vertex in `lineVertexArray`.
+ * @param lineEndIndex Index one past the last vertex of the line in `lineVertexArray`.
+ * @param lineVertexArray The line vertices of the bucket, in tile units.
+ * @param tileID The canonical ID of the tile the line belongs to.
+ * @param labelPlaneMatrix Matrix that transforms tile coordinates to the label plane.
+ * @param projection The map projection.
+ * @param elevationParams Elevation sampling parameters, if the label is elevated.
+ * @param blend Globe-to-mercator blend data, set during the globe transition.
+ *
+ * @returns The projected (`projStart`, `projEnd`) and tile space (`tileStart`, `tileEnd`) vertices, or
+ * `null` if the segment extends past the end of the line or either vertex is behind the camera plane.
+ * @private
+ */
+function projectSegment(
+    startIdx: number,
+    endIdx: number,
+    lineEndIndex: number,
+    lineVertexArray: SymbolLineVertexArray,
+    tileID: CanonicalTileID,
+    labelPlaneMatrix: mat4,
+    projection: Projection,
+    elevationParams: ElevationParams | null | undefined,
+    blend?: GlobeLineBlend | null,
+): {projStart: vec4; projEnd: vec4; tileStart: Point; tileEnd: Point} | null {
+    // The segment's second vertex would belong to the next line in the vertex array
+    if (endIdx >= lineEndIndex) return null;
+    const tileStart = new Point(lineVertexArray.getx(startIdx), lineVertexArray.gety(startIdx));
+    const tileEnd = new Point(lineVertexArray.getx(endIdx), lineVertexArray.gety(endIdx));
+    const projStart = elevatePointAndProject(tileStart, tileID, labelPlaneMatrix, projection, elevationParams, blend);
+    const projEnd = elevatePointAndProject(tileEnd, tileID, labelPlaneMatrix, projection, elevationParams, blend);
+    // w <= 0 means the vertex is behind the plane of the camera, so the projected direction is not usable
+    if (projStart[3] <= 0 || projEnd[3] <= 0) return null;
+    return {projStart, projEnd, tileStart, tileEnd};
+}
+
+/**
+ * Computes the rotation of a glyph whose baseline follows `tangent`.
+ *
+ * @param tangent Direction of the line in the label plane. It does not need to be normalized.
+ * @param baseAngle Angle in radians added to the result, `Math.PI` for glyphs that are flipped or placed backwards along the line.
+ * @param pitchWithMap Whether the label is pitched with the map, in which case the angle is measured in the plane tangent to the map surface.
+ * @param projection The map projection.
+ * @param tileID The canonical ID of the tile the line belongs to.
+ * @param tilePoint Position of the glyph in tile units, used to look up the surface normal.
+ *
+ * @returns {number} The glyph angle in radians.
+ * @private
+ */
+function computeTangentAngle(
+    tangent: vec3,
+    baseAngle: number,
+    pitchWithMap: boolean,
+    projection: Projection,
+    tileID: CanonicalTileID,
+    tilePoint: Point,
+): number {
+    let diffX = tangent[0];
+    let diffY = tangent[1];
+    if (pitchWithMap) {
+        const axisZ = projection.upVector(tileID, tilePoint.x, tilePoint.y);
+        // On a flat map the up vector is [0, 0, 1] and the label plane is already the xy plane.
+        // On the globe it is the surface normal, so the angle has to be measured in the tangent plane.
+        if (axisZ[0] !== 0 || axisZ[1] !== 0 || axisZ[2] !== 1) {
+            // Compute coordinate frame that is aligned to the tangent of the surface
+            const axisX: [number, number, number] = [axisZ[2], 0, -axisZ[0]];
+            const axisY = vec3.cross([], axisZ, axisX);
+            vec3.normalize(axisX, axisX);
+            vec3.normalize(axisY, axisY);
+            diffX = vec3.dot(tangent, axisX);
+            diffY = vec3.dot(tangent, axisY);
+        }
+    }
+    return baseAngle + Math.atan2(diffY, diffX);
+}
+
+/**
+ * Places a glyph on the straight continuation of the anchor's segment, past the end of the line.
+ *
+ * With `symbol-placement: line-start` and `line-end` the anchor sits on the first or last vertex of
+ * the line, so glyphs on the outer side of the anchor have no line geometry to follow. Instead of
+ * dropping the label, they are laid out along the tangent of the segment the anchor belongs to.
+ *
+ * @param anchorPoint The anchor projected to the label plane.
+ * @param tileAnchorPoint The anchor in tile units.
+ * @param anchorSegment Index of the segment the anchor lies on, relative to `lineStartIndex`.
+ * @param lineStartIndex Index of the first vertex of the line in `lineVertexArray`.
+ * @param lineEndIndex Index one past the last vertex of the line in `lineVertexArray`.
+ * @param lineVertexArray The line vertices of the bucket, in tile units.
+ * @param tileID The canonical ID of the tile the line belongs to.
+ * @param labelPlaneMatrix Matrix that transforms tile coordinates to the label plane.
+ * @param reprojection The map projection.
+ * @param elevationParams Elevation sampling parameters, if the label is elevated.
+ * @param dir Direction the glyph is placed in relative to the anchor's segment: `1` forwards, `-1` backwards.
+ * @param distance Signed distance from the anchor along the segment's forward direction, in label plane units.
+ * @param lineOffsetY Offset perpendicular to the line, in label plane units.
+ * @param baseAngle Angle in radians added to the glyph rotation, see `computeTangentAngle`.
+ * @param pitchWithMap Whether the label is pitched with the map.
+ * @param returnPathInTileCoords Whether to also record the path in tile units.
+ * @param pathVertices Label plane path of the glyph. The glyph position is appended to it.
+ * @param tilePath Tile space path of the glyph. The glyph position is appended to it if `returnPathInTileCoords` is set.
+ * @param blend Globe-to-mercator blend data, set during the globe transition.
+ *
+ * @returns {PlacedGlyph | null} The placed glyph, or `null` if the anchor's segment cannot be projected or has no length.
+ * @private
+ */
+function extrapolateAlongTangent(
+    anchorPoint: [number, number, number],
+    tileAnchorPoint: Point,
+    anchorSegment: number,
+    lineStartIndex: number,
+    lineEndIndex: number,
+    lineVertexArray: SymbolLineVertexArray,
+    tileID: CanonicalTileID,
+    labelPlaneMatrix: mat4,
+    reprojection: Projection,
+    elevationParams: ElevationParams | null | undefined,
+    dir: number,
+    distance: number,
+    lineOffsetY: number,
+    baseAngle: number,
+    pitchWithMap: boolean,
+    returnPathInTileCoords: boolean | null | undefined,
+    pathVertices: vec3[],
+    tilePath: Point[],
+    blend?: GlobeLineBlend | null,
+): PlacedGlyph | null {
+    const seg = projectSegment(
+        lineStartIndex + anchorSegment,
+        lineStartIndex + anchorSegment + 1,
+        lineEndIndex, lineVertexArray, tileID,
+        labelPlaneMatrix, reprojection, elevationParams, blend);
+    if (!seg) return null;
+
+    // Forward direction of the anchor's segment in the label plane
+    const tangent = vec3.sub([], seg.projEnd, seg.projStart);
+    const len = vec3.length(tangent);
+    // A degenerate segment has no direction to extrapolate along
+    if (len === 0) return null;
+    vec3.normalize(tangent, tangent);
+
+    // `distance` is signed, so a negative value moves the glyph backwards past the start of the line
+    const point = vec3.scaleAndAdd([], anchorPoint, tangent, distance);
+
+    // Find the same point in tile space. `tileLen / len` converts the label plane distance to
+    // tile units using the scale of the anchor's segment.
+    const tileTangent = seg.tileEnd.sub(seg.tileStart);
+    const tileLen = tileTangent.mag();
+    const tilePoint = tileLen > 0 ?
+        tileAnchorPoint.add(tileTangent._unit()._mult(distance * tileLen / len)) :
+        tileAnchorPoint;
+
+    // Tangent pointing in the direction the glyphs are laid out in
+    const dirTangent = vec3.scale([], tangent, dir);
+    let axisZ: [number, number, number] = [0, 0, 1];
+    if (pitchWithMap) {
+        axisZ = reprojection.upVector(tileID, tilePoint.x, tilePoint.y);
+    }
+
+    // offset the point from the line to text-offset and icon-offset
+    if (lineOffsetY) {
+        // Find a coordinate frame for the vertical offset
+        const offsetDir = vec3.cross([], axisZ, dirTangent);
+        vec3.normalize(offsetDir, offsetDir);
+        vec3.scaleAndAdd(point, point, offsetDir, lineOffsetY * dir);
+    }
+
+    pathVertices.push(point);
+    if (returnPathInTileCoords) tilePath.push(tilePoint);
+
+    const angle = computeTangentAngle(dirTangent, baseAngle, pitchWithMap, reprojection, tileID, tilePoint);
+
+    return {
+        point,
+        angle,
+        path: pathVertices,
+        tilePath,
+        up: axisZ
+    };
+}
+
 function placeGlyphAlongLine(
     offsetX: number,
     lineOffsetX: number,
@@ -733,14 +921,44 @@ function placeGlyphAlongLine(
 
     if (dir < 0) angle += Math.PI;
 
+    const absOffsetX = Math.abs(combinedOffsetX);
+
+    // Place zero-offset glyphs directly at the anchor with the segment angle.
+    // The loop below would step to a neighbouring vertex to find a direction, which does not exist
+    // on the outer side of a line-start or line-end anchor.
+    if (absOffsetX === 0) {
+        const flipAngle = flip ? Math.PI : 0;
+        const up: [number, number, number] = pitchWithMap ?
+            reprojection.upVector(tileID.canonical, tileAnchorPoint.x, tileAnchorPoint.y) : [0, 0, 1];
+        // Take the glyph direction from the segment the anchor lies on.
+        // If it cannot be projected the glyph is left unrotated.
+        const seg = projectSegment(
+            lineStartIndex + anchorSegment, lineStartIndex + anchorSegment + 1,
+            lineEndIndex, lineVertexArray, tileID.canonical, labelPlaneMatrix, reprojection, elevationParams, blend);
+        const segTangent = seg ?
+            vec3.sub([], seg.projEnd, seg.projStart) :
+            null;
+
+        return {
+            point: anchorPoint,
+            angle: segTangent ?
+                computeTangentAngle(segTangent, flipAngle, pitchWithMap, reprojection, tileID.canonical, tileAnchorPoint) :
+                flipAngle,
+            // Keep the [anchor, glyph point] path shape the collision code expects
+            // (populateProjectedGlyphAnchors skips index 0 and needs at least two points).
+            path: [anchorPoint, vec3.clone(anchorPoint)],
+            tilePath: returnPathInTileCoords ? [tileAnchorPoint, tileAnchorPoint.clone()] : [],
+            up
+        };
+    }
+
     let currentIndex = lineStartIndex + anchorSegment + (dir > 0 ? 0 : 1) | 0;
     let current = anchorPoint;
     let prev = anchorPoint;
     let distanceToPrev = 0;
     let currentSegmentDistance = 0;
-    const absOffsetX = Math.abs(combinedOffsetX);
-    const pathVertices = [];
-    const tilePath = [];
+    const pathVertices: vec3[] = [];
+    const tilePath: Point[] = [];
     let currentVertex = tileAnchorPoint;
     let prevVertex = currentVertex;
     let prevToCurrent = vec3.zero([]);
@@ -749,8 +967,20 @@ function placeGlyphAlongLine(
         currentIndex += dir;
 
         // offset does not fit on the projected line
-        if (currentIndex < lineStartIndex || currentIndex >= lineEndIndex)
+        if (currentIndex < lineStartIndex || currentIndex >= lineEndIndex) {
+            // Haven't traversed any segments yet, so the anchor is on the first or last vertex and
+            // the glyph lies beyond it (line-start and line-end placement): extrapolate past the endpoint.
+            // `dir * absOffsetX` is the signed distance along the forward direction of the anchor's segment.
+            if (distanceToPrev === 0 && currentSegmentDistance === 0) {
+                return extrapolateAlongTangent(
+                    anchorPoint, tileAnchorPoint, anchorSegment,
+                    lineStartIndex, lineEndIndex, lineVertexArray,
+                    tileID.canonical, labelPlaneMatrix, reprojection, elevationParams,
+                    dir, dir * absOffsetX, lineOffsetY, angle, pitchWithMap,
+                    returnPathInTileCoords, pathVertices, tilePath, blend);
+            }
             return null;
+        }
 
         prev = current;
         prevVertex = currentVertex;
@@ -831,9 +1061,7 @@ function placeGlyphAlongLine(
     return {
         point: labelPlanePoint,
         angle: segmentAngle,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         path: pathVertices,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         tilePath,
         up: axisZ
     };

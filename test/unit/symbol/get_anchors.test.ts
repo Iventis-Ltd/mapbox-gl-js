@@ -2,7 +2,7 @@
 // @ts-nocheck
 import {describe, test, expect} from '../../util/vitest';
 import Point from '@mapbox/point-geometry';
-import {getAnchors, getCenterAnchor} from '../../../src/symbol/get_anchors';
+import {getAnchors, getCenterAnchor, getStartAnchor, getEndAnchor} from '../../../src/symbol/get_anchors';
 
 const TILE_EXTENT = 4096;
 
@@ -115,5 +115,52 @@ describe('getAnchors', () => {
         const line = [new Point(1, 1), new Point(1, 3), new Point(3, 3)];
         const anchor = getCenterAnchor(line, Math.PI / 4, shapedText, shapedIcon, glyphSize, 1);
         expect(anchor).toBeFalsy();
+    });
+
+    test('getStartAnchor', () => {
+        const line = [new Point(1, 1), new Point(1, 3), new Point(3, 6), new Point(4, 7)];
+        const anchor = getStartAnchor(line, Math.PI, shapedText, shapedIcon, glyphSize, 1);
+        expect(anchor).toEqual(
+            {x: 1, y: 1, z: 0.0, angle: -1.5707963267948966, segment: 0}
+        );
+    });
+
+    test('getEndAnchor', () => {
+        const line = [new Point(1, 1), new Point(1, 3), new Point(3, 6), new Point(4, 7)];
+        const anchor = getEndAnchor(line, Math.PI, shapedText, shapedIcon, glyphSize, 1);
+        expect(anchor).toEqual(
+            {x: 4, y: 7, z: 0.0, angle: 0.7853981633974483, segment: 2}
+        );
+    });
+
+    test('getStartAnchor and getEndAnchor on a single segment line', () => {
+        const line = [new Point(0, 0), new Point(10, 0)];
+        // Both anchors lie on the only segment and their angles point away from the line
+        expect(getStartAnchor(line, Math.PI, shapedText, shapedIcon, glyphSize, 1)).toEqual(
+            {x: 0, y: 0, z: 0.0, angle: Math.PI, segment: 0}
+        );
+        expect(getEndAnchor(line, Math.PI, shapedText, shapedIcon, glyphSize, 1)).toEqual(
+            {x: 10, y: 0, z: 0.0, angle: 0, segment: 0}
+        );
+    });
+
+    test('getStartAnchor and getEndAnchor with fewer than two points', () => {
+        expect(getStartAnchor([], Math.PI, shapedText, shapedIcon, glyphSize, 1)).toBeFalsy();
+        expect(getStartAnchor([new Point(1, 1)], Math.PI, shapedText, shapedIcon, glyphSize, 1)).toBeFalsy();
+        expect(getEndAnchor([], Math.PI, shapedText, shapedIcon, glyphSize, 1)).toBeFalsy();
+        expect(getEndAnchor([new Point(1, 1)], Math.PI, shapedText, shapedIcon, glyphSize, 1)).toBeFalsy();
+    });
+
+    test('getStartAnchor and getEndAnchor are not limited by label length or maxAngle', () => {
+        // The label is much longer than the line and maxAngle is zero, which makes getCenterAnchor reject the line
+        const line = [new Point(1, 1), new Point(1, 3), new Point(3, 3)];
+        const longText = {left: -100, right: 100, top: -0.5, bottom: 0.5};
+        expect(getCenterAnchor(line, 0, longText, shapedIcon, glyphSize, 1)).toBeFalsy();
+        expect(getStartAnchor(line, 0, longText, shapedIcon, glyphSize, 1)).toEqual(
+            {x: 1, y: 1, z: 0.0, angle: -1.5707963267948966, segment: 0}
+        );
+        expect(getEndAnchor(line, 0, longText, shapedIcon, glyphSize, 1)).toEqual(
+            {x: 3, y: 3, z: 0.0, angle: 0, segment: 1}
+        );
     });
 });
