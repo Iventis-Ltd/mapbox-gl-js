@@ -694,6 +694,117 @@ function projectLinePoint(
     return projectTruncatedLineSegment(previousTilePoint, tilePoint, previousProjectedPoint, truncationLength, labelPlaneMatrix, elevationParams, projection, tileID, blend);
 }
 
+function projectSegment(
+    startIdx: number,
+    endIdx: number,
+    lineEndIndex: number,
+    lineVertexArray: SymbolLineVertexArray,
+    tileID: CanonicalTileID,
+    labelPlaneMatrix: mat4,
+    projection: Projection,
+    elevationParams: ElevationParams | null | undefined,
+    blend?: GlobeLineBlend | null,
+): {projStart: vec4; projEnd: vec4; tileStart: Point; tileEnd: Point} | null {
+    if (endIdx >= lineEndIndex) return null;
+    const tileStart = new Point(lineVertexArray.getx(startIdx), lineVertexArray.gety(startIdx));
+    const tileEnd = new Point(lineVertexArray.getx(endIdx), lineVertexArray.gety(endIdx));
+    const projStart = elevatePointAndProject(tileStart, tileID, labelPlaneMatrix, projection, elevationParams, blend);
+    const projEnd = elevatePointAndProject(tileEnd, tileID, labelPlaneMatrix, projection, elevationParams, blend);
+    if (projStart[3] <= 0 || projEnd[3] <= 0) return null;
+    return {projStart, projEnd, tileStart, tileEnd};
+}
+
+function computeTangentAngle(
+    tangent: vec3,
+    baseAngle: number,
+    pitchWithMap: boolean,
+    projection: Projection,
+    tileID: CanonicalTileID,
+    tilePoint: Point,
+): number {
+    let diffX = tangent[0];
+    let diffY = tangent[1];
+    if (pitchWithMap) {
+        const axisZ = projection.upVector(tileID, tilePoint.x, tilePoint.y);
+        if (axisZ[0] !== 0 || axisZ[1] !== 0 || axisZ[2] !== 1) {
+            const axisX: [number, number, number] = [axisZ[2], 0, -axisZ[0]];
+            const axisY = vec3.cross([], axisZ, axisX);
+            vec3.normalize(axisX, axisX);
+            vec3.normalize(axisY, axisY);
+            diffX = vec3.dot(tangent, axisX);
+            diffY = vec3.dot(tangent, axisY);
+        }
+    }
+    return baseAngle + Math.atan2(diffY, diffX);
+}
+
+function extrapolateAlongTangent(
+    anchorPoint: [number, number, number],
+    tileAnchorPoint: Point,
+    anchorSegment: number,
+    lineStartIndex: number,
+    lineEndIndex: number,
+    lineVertexArray: SymbolLineVertexArray,
+    tileID: CanonicalTileID,
+    labelPlaneMatrix: mat4,
+    reprojection: Projection,
+    elevationParams: ElevationParams | null | undefined,
+    dir: number,
+    distance: number,
+    lineOffsetY: number,
+    baseAngle: number,
+    pitchWithMap: boolean,
+    returnPathInTileCoords: boolean | null | undefined,
+    pathVertices: vec3[],
+    tilePath: Point[],
+    blend?: GlobeLineBlend | null,
+): PlacedGlyph | null {
+    const seg = projectSegment(
+        lineStartIndex + anchorSegment,
+        lineStartIndex + anchorSegment + 1,
+        lineEndIndex, lineVertexArray, tileID,
+        labelPlaneMatrix, reprojection, elevationParams, blend);
+    if (!seg) return null;
+
+    const tangent = vec3.sub([], seg.projEnd, seg.projStart);
+    const len = vec3.length(tangent);
+    if (len === 0) return null;
+    vec3.normalize(tangent, tangent);
+
+    const point = vec3.scaleAndAdd([], anchorPoint, tangent, distance);
+
+    const tileTangent = seg.tileEnd.sub(seg.tileStart);
+    const tileLen = tileTangent.mag();
+    const tilePoint = tileLen > 0 ?
+        tileAnchorPoint.add(tileTangent._unit()._mult(distance * tileLen / len)) :
+        tileAnchorPoint;
+
+    const dirTangent = vec3.scale([], tangent, dir);
+    let axisZ: [number, number, number] = [0, 0, 1];
+    if (pitchWithMap) {
+        axisZ = reprojection.upVector(tileID, tilePoint.x, tilePoint.y);
+    }
+
+    if (lineOffsetY) {
+        const offsetDir = vec3.cross([], axisZ, dirTangent);
+        vec3.normalize(offsetDir, offsetDir);
+        vec3.scaleAndAdd(point, point, offsetDir, lineOffsetY * dir);
+    }
+
+    pathVertices.push(point);
+    if (returnPathInTileCoords) tilePath.push(tilePoint);
+
+    const angle = computeTangentAngle(dirTangent, baseAngle, pitchWithMap, reprojection, tileID, tilePoint);
+
+    return {
+        point,
+        angle,
+        path: pathVertices,
+        tilePath,
+        up: axisZ
+    };
+}
+
 function placeGlyphAlongLine(
     offsetX: number,
     lineOffsetX: number,
@@ -733,14 +844,40 @@ function placeGlyphAlongLine(
 
     if (dir < 0) angle += Math.PI;
 
+    const absOffsetX = Math.abs(combinedOffsetX);
+
+    // Place zero-offset glyphs directly at the anchor with the segment angle
+    if (absOffsetX === 0) {
+        const flipAngle = flip ? Math.PI : 0;
+        const up: [number, number, number] = pitchWithMap ?
+            reprojection.upVector(tileID.canonical, tileAnchorPoint.x, tileAnchorPoint.y) : [0, 0, 1];
+        const seg = projectSegment(
+            lineStartIndex + anchorSegment, lineStartIndex + anchorSegment + 1,
+            lineEndIndex, lineVertexArray, tileID.canonical, labelPlaneMatrix, reprojection, elevationParams, blend);
+        const segTangent = seg ?
+            vec3.sub([], seg.projEnd, seg.projStart) :
+            null;
+
+        return {
+            point: anchorPoint,
+            angle: segTangent ?
+                computeTangentAngle(segTangent, flipAngle, pitchWithMap, reprojection, tileID.canonical, tileAnchorPoint) :
+                flipAngle,
+            // Keep the [anchor, glyph point] path shape the collision code expects
+            // (populateProjectedGlyphAnchors skips index 0 and needs at least two points).
+            path: [anchorPoint, vec3.clone(anchorPoint)],
+            tilePath: returnPathInTileCoords ? [tileAnchorPoint, tileAnchorPoint.clone()] : [],
+            up
+        };
+    }
+
     let currentIndex = lineStartIndex + anchorSegment + (dir > 0 ? 0 : 1) | 0;
     let current = anchorPoint;
     let prev = anchorPoint;
     let distanceToPrev = 0;
     let currentSegmentDistance = 0;
-    const absOffsetX = Math.abs(combinedOffsetX);
-    const pathVertices = [];
-    const tilePath = [];
+    const pathVertices: vec3[] = [];
+    const tilePath: Point[] = [];
     let currentVertex = tileAnchorPoint;
     let prevVertex = currentVertex;
     let prevToCurrent = vec3.zero([]);
@@ -749,8 +886,18 @@ function placeGlyphAlongLine(
         currentIndex += dir;
 
         // offset does not fit on the projected line
-        if (currentIndex < lineStartIndex || currentIndex >= lineEndIndex)
+        if (currentIndex < lineStartIndex || currentIndex >= lineEndIndex) {
+            // Haven't traversed any segments yet — extrapolate past the endpoint
+            if (distanceToPrev === 0 && currentSegmentDistance === 0) {
+                return extrapolateAlongTangent(
+                    anchorPoint, tileAnchorPoint, anchorSegment,
+                    lineStartIndex, lineEndIndex, lineVertexArray,
+                    tileID.canonical, labelPlaneMatrix, reprojection, elevationParams,
+                    dir, dir * absOffsetX, lineOffsetY, angle, pitchWithMap,
+                    returnPathInTileCoords, pathVertices, tilePath, blend);
+            }
             return null;
+        }
 
         prev = current;
         prevVertex = currentVertex;
@@ -831,9 +978,7 @@ function placeGlyphAlongLine(
     return {
         point: labelPlanePoint,
         angle: segmentAngle,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         path: pathVertices,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         tilePath,
         up: axisZ
     };
