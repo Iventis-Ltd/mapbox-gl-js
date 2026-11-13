@@ -167,6 +167,26 @@ function resample(line: Array<Point>, offset: number, spacing: number, angleWind
     return anchors;
 }
 
+/**
+ * Returns the anchor for `symbol-placement: line-start`: a single anchor on the first vertex of the line.
+ *
+ * Unlike `getCenterAnchor`, the label is never rejected for being longer than the line or for
+ * crossing a sharp angle. Glyphs that do not fit on the line are extrapolated past the anchor at
+ * projection time (see `extrapolateAlongTangent` in `projection.ts`).
+ *
+ * The parameters after `line` are unused. They are kept so that the signature matches
+ * `getCenterAnchor` and the call sites in `symbol_layout.ts` stay interchangeable.
+ *
+ * @param line The line geometry in tile units.
+ * @param maxAngle Unused. The maximum combined angle a label is allowed to cross.
+ * @param shapedText Unused. The shaped text of the label.
+ * @param shapedIcon Unused. The shaped icon of the label.
+ * @param glyphSize Unused. The size of a glyph in layout units.
+ * @param boxScale Unused. The scale that converts glyph units to tile units.
+ *
+ * @returns {Anchor | undefined} The anchor, or `undefined` if the line has fewer than two points.
+ * @private
+ */
 function getStartAnchor(
     line: Array<Point>,
     maxAngle: number,
@@ -180,10 +200,33 @@ function getStartAnchor(
     // Use the first point as the anchor
     const a = line[0];
     const b = line[1];
+    // `a.angleTo(b)` is the direction from `b` to `a`, so the angle points outwards, from the line's
+    // second vertex back past its first
     const angle = a.angleTo(b);
+    // The anchor lies on segment 0, the segment between `line[0]` and `line[1]`
     return new Anchor(a.x, a.y, 0, angle, 0);
 }
 
+/**
+ * Returns the anchor for `symbol-placement: line-end`: a single anchor on the last vertex of the line.
+ *
+ * Unlike `getCenterAnchor`, the label is never rejected for being longer than the line or for
+ * crossing a sharp angle. Glyphs that do not fit on the line are extrapolated past the anchor at
+ * projection time (see `extrapolateAlongTangent` in `projection.ts`).
+ *
+ * The parameters after `line` are unused. They are kept so that the signature matches
+ * `getCenterAnchor` and the call sites in `symbol_layout.ts` stay interchangeable.
+ *
+ * @param line The line geometry in tile units.
+ * @param maxAngle Unused. The maximum combined angle a label is allowed to cross.
+ * @param shapedText Unused. The shaped text of the label.
+ * @param shapedIcon Unused. The shaped icon of the label.
+ * @param glyphSize Unused. The size of a glyph in layout units.
+ * @param boxScale Unused. The scale that converts glyph units to tile units.
+ *
+ * @returns {Anchor | undefined} The anchor, or `undefined` if the line has fewer than two points.
+ * @private
+ */
 function getEndAnchor(
     line: Array<Point>,
     maxAngle: number,
@@ -198,6 +241,9 @@ function getEndAnchor(
     const lastIndex = line.length - 1;
     const a = line[lastIndex];
     const b = line[lastIndex - 1];
+    // `a.angleTo(b)` is the direction from `b` to `a`, so the angle points outwards, from the line's
+    // second to last vertex past its last
     const angle = a.angleTo(b);
+    // Segment `i` runs from `line[i]` to `line[i + 1]`, so the last vertex belongs to segment `lastIndex - 1`
     return new Anchor(a.x, a.y, 0, angle, lastIndex - 1);
 }
