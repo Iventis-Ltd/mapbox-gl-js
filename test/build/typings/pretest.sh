@@ -16,9 +16,10 @@ cp "$DEST"/package.json \
    "$ISO_DIR/"
 
 cd "$ISO_DIR"
-npm install --no-save "$TARBALL_DIR/mapbox-gl.tgz"
+# Install under the unscoped name so that `mapbox-gl` imports resolve to the @iventis/mapbox-gl tarball.
+npm install --no-save "mapbox-gl@file:$TARBALL_DIR/mapbox-gl.tgz"
 npm run tsc:strict
 
 cd "$DEST"
 rm -rf node_modules/mapbox-gl node_modules/@mapbox/mapbox-gl-style-spec
-npm install --no-save "$TARBALL_DIR/mapbox-gl.tgz" "$TARBALL_DIR/mapbox-gl-style-spec.tgz"
+npm install --no-save "mapbox-gl@file:$TARBALL_DIR/mapbox-gl.tgz" "$TARBALL_DIR/mapbox-gl-style-spec.tgz"

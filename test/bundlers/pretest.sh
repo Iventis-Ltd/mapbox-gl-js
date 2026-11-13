@@ -11,4 +11,5 @@ done
 
 # Bundler pages must consume the packed artifact, not the workspace source.
 rm -rf node_modules/mapbox-gl
-npm install --no-save ./test/mapbox-gl.tgz
+# Install under the unscoped name so that `mapbox-gl` imports resolve to the @iventis/mapbox-gl tarball.
+npm install --no-save "mapbox-gl@file:./test/mapbox-gl.tgz"

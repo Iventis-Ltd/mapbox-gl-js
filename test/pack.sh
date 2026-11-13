@@ -15,10 +15,11 @@ if [ -f "$DEST/mapbox-gl.tgz" ] && [ -f "$DEST/mapbox-gl-style-spec.tgz" ] \
   exit 0
 fi
 
-rm -f "$DEST"/mapbox-gl-*.tgz "$DEST"/mapbox-mapbox-gl-style-spec-*.tgz
+rm -f "$DEST"/mapbox-gl-*.tgz "$DEST"/iventis-mapbox-gl-*.tgz "$DEST"/mapbox-mapbox-gl-style-spec-*.tgz
 
 npm pack --pack-destination "$DEST"
 npm pack --pack-destination "$DEST" --workspace src/style-spec
 
-mv -f "$DEST"/mapbox-gl-[0-9]*.tgz "$DEST/mapbox-gl.tgz"
+# The Iventis fork publishes as @iventis/mapbox-gl, so npm pack names the tarball iventis-mapbox-gl-<version>.tgz.
+mv -f "$DEST"/iventis-mapbox-gl-[0-9]*.tgz "$DEST/mapbox-gl.tgz"
 mv -f "$DEST"/mapbox-mapbox-gl-style-spec-*.tgz "$DEST/mapbox-gl-style-spec.tgz"
